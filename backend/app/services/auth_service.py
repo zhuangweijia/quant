@@ -1,0 +1,54 @@
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import bcrypt
+from jose import jwt, JWTError
+
+from app.config import get_settings
+
+
+class AuthService:
+    @classmethod
+    def hash_password(cls, password: str) -> str:
+        return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
+
+    @classmethod
+    def verify_password(cls, plain: str, hashed: str) -> bool:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+    @classmethod
+    def create_access_token(cls, user_id: str, role: str) -> str:
+        settings = get_settings()
+        expire = datetime.now(timezone.utc) + timedelta(
+            minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
+        )
+        payload = {
+            "sub": user_id,
+            "role": role,
+            "exp": expire,
+            "type": "access",
+        }
+        private_key = Path(settings.JWT_PRIVATE_KEY_PATH).read_text()
+        return jwt.encode(payload, private_key, algorithm=settings.JWT_ALGORITHM)
+
+    @classmethod
+    def create_refresh_token(cls, user_id: str) -> str:
+        settings = get_settings()
+        expire = datetime.now(timezone.utc) + timedelta(
+            days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS
+        )
+        payload = {"sub": user_id, "exp": expire, "type": "refresh"}
+        private_key = Path(settings.JWT_PRIVATE_KEY_PATH).read_text()
+        return jwt.encode(payload, private_key, algorithm=settings.JWT_ALGORITHM)
+
+    @classmethod
+    def decode_token(cls, token: str) -> dict | None:
+        settings = get_settings()
+        try:
+            public_key = Path(settings.JWT_PUBLIC_KEY_PATH).read_text()
+            payload = jwt.decode(
+                token, public_key, algorithms=[settings.JWT_ALGORITHM]
+            )
+            return payload
+        except JWTError:
+            return None
