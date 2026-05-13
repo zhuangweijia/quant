@@ -5,12 +5,12 @@ export interface Order {
   market: string;
   side: string;
   order_type: string;
-  qty: number;
-  price: number | null;
+  qty: string;
+  price: string | null;
   status: string;
-  filled_qty: number;
-  filled_price: number | null;
-  commission: number;
+  filled_qty: string;
+  filled_price: string | null;
+  commission: string;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -21,11 +21,9 @@ export interface Position {
   strategy_id: string | null;
   symbol: string;
   market: string;
-  qty: number;
-  avg_price: number;
-  market_value?: number;
-  unrealized_pnl?: number;
-  unrealized_pnl_pct?: number;
+  qty: string;
+  avg_price: string;
+  frozen_qty: string;
   updated_at: string;
 }
 
@@ -37,4 +35,19 @@ export interface OrderRequest {
   qty: number;
   price?: number;
   strategy_id?: string;
+}
+
+export interface AccountInfo {
+  total_equity: string;
+  cash: string;
+  position_value: string;
+  daily_pnl: string;
+  daily_pnl_pct: string;
+  total_pnl: string;
+  total_pnl_pct: string;
+  running_strategies: number;
+  total_strategies: number;
+  today_trades: number;
+  unread_alerts: number;
+  mode: string;
 }

@@ -1,12 +1,18 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, func
+from sqlalchemy import DateTime, func, String, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.config import get_settings
 
 
 class Base(DeclarativeBase):
     pass
+
+
+_settings = get_settings()
+_is_sqlite = _settings.DATABASE_URL.startswith("sqlite")
 
 
 class TimestampMixin:
@@ -22,7 +28,11 @@ class TimestampMixin:
 
 
 class UUIDMixin:
-    id: Mapped[uuid.UUID] = mapped_column(
+    id: Mapped[str] = mapped_column(
+        String(36),
         primary_key=True,
-        default=uuid.uuid4,
+        default=lambda: str(uuid.uuid4()),
     )
+
+
+JsonType = JSON

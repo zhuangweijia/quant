@@ -1,6 +1,6 @@
 import client from "./client";
 import type { ResponseBase, PageResponse } from "@/types/common";
-import type { Order, Position, OrderRequest } from "@/types/trade";
+import type { Order, Position, OrderRequest, AccountInfo } from "@/types/trade";
 
 export const tradeApi = {
   submitOrder: (data: OrderRequest) =>
@@ -14,4 +14,10 @@ export const tradeApi = {
 
   getPositions: () =>
     client.get<ResponseBase<Position[]>>("/api/v1/trade/positions"),
+
+  closePosition: (positionId: string) =>
+    client.post<ResponseBase<null>>("/api/v1/trade/positions/close", null, { params: { position_id: positionId } }),
+
+  getAccount: () =>
+    client.get<ResponseBase<AccountInfo>>("/api/v1/trade/account"),
 };

@@ -6,6 +6,7 @@ from app.models.position import Position
 from app.models.market_data import MarketData, BacktestResult
 from app.models.risk_rule import RiskRule
 from app.models.alert import Alert
+from app.models.account import Account
 
 __all__ = [
     "Base",
@@ -17,4 +18,5 @@ __all__ = [
     "BacktestResult",
     "RiskRule",
     "Alert",
+    "Account",
 ]

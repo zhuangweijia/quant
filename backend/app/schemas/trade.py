@@ -42,6 +42,24 @@ class PositionResponse(BaseModel):
     market: str
     qty: Decimal
     avg_price: Decimal
+    frozen_qty: Decimal = Decimal("0")
     updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AccountInfoResponse(BaseModel):
+    total_equity: Decimal
+    cash: Decimal
+    position_value: Decimal
+    daily_pnl: Decimal
+    daily_pnl_pct: Decimal
+    total_pnl: Decimal
+    total_pnl_pct: Decimal
+    running_strategies: int
+    total_strategies: int
+    today_trades: int
+    unread_alerts: int
+    mode: str
 
     model_config = {"from_attributes": True}

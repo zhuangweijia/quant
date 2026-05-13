@@ -1,4 +1,3 @@
-import uuid
 from decimal import Decimal
 
 from sqlalchemy import String, ForeignKey, Numeric, Index
@@ -14,11 +13,11 @@ class Order(UUIDMixin, TimestampMixin, Base):
         Index("ix_orders_symbol", "symbol"),
     )
 
-    strategy_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
+    strategy_id: Mapped[str | None] = mapped_column(
+        String(36), ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     market: Mapped[str] = mapped_column(String(16), nullable=False)

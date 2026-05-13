@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, market, strategy, backtest, trade, risk, dashboard
+from app.api.v1 import auth, market, strategy, backtest, trade, risk, dashboard, settings
 
 router = APIRouter()
 
@@ -11,3 +11,4 @@ router.include_router(backtest.router, prefix="/backtest", tags=["回测"])
 router.include_router(trade.router, prefix="/trade", tags=["交易"])
 router.include_router(risk.router, prefix="/risk", tags=["风控"])
 router.include_router(dashboard.router, prefix="/dashboard", tags=["看板"])
+router.include_router(settings.router, prefix="/settings", tags=["设置"])

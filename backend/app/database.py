@@ -9,12 +9,17 @@ from app.config import get_settings
 
 settings = get_settings()
 
+_db_url = settings.DATABASE_URL
+_sqlite = _db_url.startswith("sqlite")
+
 engine = create_async_engine(
-    settings.DATABASE_URL,
-    pool_size=settings.DB_POOL_SIZE,
-    max_overflow=settings.DB_MAX_OVERFLOW,
-    pool_recycle=settings.DB_POOL_RECYCLE,
+    _db_url,
     echo=settings.DEBUG,
+    **({} if _sqlite else {
+        "pool_size": settings.DB_POOL_SIZE,
+        "max_overflow": settings.DB_MAX_OVERFLOW,
+        "pool_recycle": settings.DB_POOL_RECYCLE,
+    }),
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -35,8 +40,13 @@ async def get_db() -> AsyncSession:
 
 
 async def init_db() -> None:
-    async with engine.begin() as conn:
-        await conn.execute(text("SELECT 1"))
+    if _sqlite:
+        from app.models.base import Base
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    else:
+        async with engine.begin() as conn:
+            await conn.execute(text("SELECT 1"))
 
 
 async def close_db() -> None:
