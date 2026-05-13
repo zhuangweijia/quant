@@ -17,6 +17,8 @@ client.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
+let isRedirecting = false;
+
 client.interceptors.response.use(
   (response) => {
     const { code, message, data } = response.data;
@@ -27,8 +29,16 @@ client.interceptors.response.use(
   },
   async (error: AxiosError) => {
     if (error.response?.status === 401) {
-      storage.clearAuth();
-      window.location.href = "/login";
+      const url = error.config?.url || "";
+      if (url.includes("/auth/login") || url.includes("/auth/refresh")) {
+        const msg = (error.response?.data as any)?.message || "用户名或密码错误";
+        return Promise.reject(new Error(msg));
+      }
+      if (!isRedirecting) {
+        isRedirecting = true;
+        storage.clearAuth();
+        window.location.href = "/login";
+      }
     }
     const msg =
       (error.response?.data as any)?.message || error.message || "网络错误";
