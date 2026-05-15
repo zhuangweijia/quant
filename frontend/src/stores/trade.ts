@@ -1,12 +1,25 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { tradeApi } from "@/api/trade";
+import { wsClient } from "@/utils/websocket";
 import type { Order, Position, OrderRequest, AccountInfo } from "@/types/trade";
 
 export const useTradeStore = defineStore("trade", () => {
   const positions = ref<Position[]>([]);
   const orders = ref<Order[]>([]);
+  const ordersTotal = ref(0);
   const account = ref<AccountInfo | null>(null);
+
+  wsClient.on("trade:order", () => {
+    fetchOrders();
+    fetchPositions();
+    fetchAccount();
+  });
+
+  wsClient.on("trade:position", () => {
+    fetchPositions();
+    fetchAccount();
+  });
 
   async function fetchPositions() {
     const res: any = await tradeApi.getPositions();
@@ -16,6 +29,7 @@ export const useTradeStore = defineStore("trade", () => {
   async function fetchOrders(params?: Record<string, any>) {
     const res: any = await tradeApi.getOrders(params);
     orders.value = res.data.items || [];
+    ordersTotal.value = res.data.total || 0;
   }
 
   async function submitOrder(data: OrderRequest) {
@@ -39,6 +53,7 @@ export const useTradeStore = defineStore("trade", () => {
   return {
     positions,
     orders,
+    ordersTotal,
     account,
     fetchPositions,
     fetchOrders,

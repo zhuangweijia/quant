@@ -2,12 +2,14 @@ from abc import ABC, abstractmethod
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.risk_rule import RiskRule
 from app.models.alert import Alert
 from app.models.position import Position
+from app.models.order import Order
+from app.models.risk_event import RiskEvent
 from app.services.account_service import get_or_create_account
 from app.services.market_service import get_provider
 from app.core.events import event_bus
@@ -100,6 +102,25 @@ class MaxOrderAmountEvaluator(RiskRuleEvaluator):
         return True, ""
 
 
+class StopLossEvaluator(RiskRuleEvaluator):
+    def __init__(self, params: dict):
+        self.stop_type = params.get("stop_type", "fixed")
+        self.stop_value = float(params.get("value", 0))
+        self.trail_percent = float(params.get("trail_percent", 0))
+
+    async def evaluate(self, order, context):
+        return True, ""
+
+
+class TakeProfitEvaluator(RiskRuleEvaluator):
+    def __init__(self, params: dict):
+        self.take_type = params.get("take_type", "fixed")
+        self.take_value = float(params.get("value", 0))
+
+    async def evaluate(self, order, context):
+        return True, ""
+
+
 RULE_EVALUATORS = {
     "max_position_value": MaxPositionValueEvaluator,
     "max_position_ratio": MaxPositionRatioEvaluator,
@@ -107,13 +128,13 @@ RULE_EVALUATORS = {
     "daily_trade_limit": DailyTradeLimitEvaluator,
     "blacklist": BlacklistEvaluator,
     "max_order_amount": MaxOrderAmountEvaluator,
-    "stop_loss": None,
-    "take_profit": None,
+    "stop_loss": StopLossEvaluator,
+    "take_profit": TakeProfitEvaluator,
     "max_total_position": MaxPositionRatioEvaluator,
 }
 
 
-async def build_context(db: AsyncSession, user_id: str, symbol: str) -> dict:
+async def build_context(db: AsyncSession, user_id: str, symbol: str, market: str = "") -> dict:
     account = await get_or_create_account(db, user_id)
     pos_result = await db.execute(
         select(Position).where(Position.user_id == user_id, Position.qty > 0)
@@ -122,8 +143,10 @@ async def build_context(db: AsyncSession, user_id: str, symbol: str) -> dict:
 
     total_position_value = Decimal("0")
     position_values = {}
+    position_markets: dict[str, str] = {}
     for pos in positions:
         provider = get_provider(pos.market)
+        position_markets[pos.symbol] = pos.market
         try:
             latest = await provider.get_latest_price(pos.symbol)
             price = Decimal(latest.get("price", "0"))
@@ -134,12 +157,46 @@ async def build_context(db: AsyncSession, user_id: str, symbol: str) -> dict:
         total_position_value += value
 
     current_price = Decimal("0")
-    provider = get_provider("mock")
-    try:
-        latest = await provider.get_latest_price(symbol)
-        current_price = Decimal(latest.get("price", "0"))
-    except Exception:
-        pass
+    if symbol:
+        effective_market = market or position_markets.get(symbol, "mock")
+        try:
+            provider = get_provider(effective_market)
+            latest = await provider.get_latest_price(symbol)
+            current_price = Decimal(latest.get("price", "0"))
+        except Exception:
+            pass
+
+    today_start = datetime.now(timezone.utc).strftime("%Y-%m-%d") + "T00:00:00+00:00"
+
+    daily_trades_result = await db.scalar(
+        select(func.count(Order.id)).where(
+            Order.user_id == user_id,
+            Order.status == "filled",
+            Order.created_at >= today_start,
+        )
+    )
+
+    daily_filled = await db.execute(
+        select(Order).where(
+            Order.user_id == user_id,
+            Order.status == "filled",
+            Order.side == "sell",
+            Order.created_at >= today_start,
+        )
+    )
+    daily_loss = Decimal("0")
+    for order in daily_filled.scalars().all():
+        if order.filled_price and order.filled_qty:
+            pos_q = await db.execute(
+                select(Position).where(
+                    Position.user_id == user_id,
+                    Position.symbol == order.symbol,
+                )
+            )
+            pos = pos_q.scalar_one_or_none()
+            if pos:
+                pnl = (order.filled_price - pos.avg_price) * order.filled_qty
+                daily_loss += pnl
 
     return {
         "total_equity": float(account.cash + total_position_value),
@@ -147,8 +204,8 @@ async def build_context(db: AsyncSession, user_id: str, symbol: str) -> dict:
         "total_position_value": float(total_position_value),
         "position_values": position_values,
         "current_price": float(current_price),
-        "daily_loss": 0,
-        "daily_trades": 0,
+        "daily_loss": float(daily_loss),
+        "daily_trades": daily_trades_result or 0,
     }
 
 
@@ -163,7 +220,7 @@ async def evaluate_risk(db: AsyncSession, user_id: str, order: dict) -> tuple[bo
     if not rules:
         return True, ""
 
-    context = await build_context(db, user_id, order.get("symbol", ""))
+    context = await build_context(db, user_id, order.get("symbol", ""), order.get("market", ""))
 
     for rule in rules:
         evaluator_cls = RULE_EVALUATORS.get(rule.rule_type)
@@ -177,6 +234,7 @@ async def evaluate_risk(db: AsyncSession, user_id: str, order: dict) -> tuple[bo
                 "warning", "风控拦截",
                 f"订单被拦截: {reason}",
             )
+            await _create_risk_event(db, user_id, rule, order, "block", reason)
             return False, reason
 
     return True, ""
@@ -210,6 +268,23 @@ async def _create_alert(
     return alert
 
 
+async def _create_risk_event(
+    db: AsyncSession, user_id: str, rule: RiskRule,
+    order: dict, result: str, reason: str,
+) -> RiskEvent:
+    event = RiskEvent(
+        user_id=user_id,
+        strategy_id=rule.strategy_id,
+        rule_id=str(rule.id),
+        rule_type=rule.rule_type,
+        result=result,
+        detail={"reason": reason, "order": order},
+    )
+    db.add(event)
+    await db.flush()
+    return event
+
+
 async def mark_all_alerts_read(db: AsyncSession, user_id: str) -> int:
     result = await db.execute(
         select(Alert).where(Alert.user_id == user_id, Alert.read == False)
@@ -224,8 +299,81 @@ async def mark_all_alerts_read(db: AsyncSession, user_id: str) -> int:
 
 
 async def get_unread_count(db: AsyncSession, user_id: str) -> int:
-    from sqlalchemy import func
     result = await db.scalar(
         select(func.count(Alert.id)).where(Alert.user_id == user_id, Alert.read == False)
     )
     return result or 0
+
+
+async def check_stop_loss_take_profit(db: AsyncSession, user_id: str):
+    rules_result = await db.execute(
+        select(RiskRule).where(
+            RiskRule.user_id == user_id,
+            RiskRule.enabled == True,
+            RiskRule.rule_type.in_(["stop_loss", "take_profit"]),
+        )
+    )
+    rules = rules_result.scalars().all()
+    if not rules:
+        return
+
+    pos_result = await db.execute(
+        select(Position).where(Position.user_id == user_id, Position.qty > 0)
+    )
+    positions = pos_result.scalars().all()
+
+    for pos in positions:
+        provider = get_provider(pos.market)
+        try:
+            latest = await provider.get_latest_price(pos.symbol)
+            current_price = float(latest.get("price", "0"))
+        except Exception:
+            continue
+
+        for rule in rules:
+            if rule.strategy_id and str(rule.strategy_id) != str(pos.strategy_id):
+                continue
+
+            should_close = False
+            reason = ""
+
+            if rule.rule_type == "stop_loss":
+                stop_type = rule.params.get("stop_type", "fixed")
+                if stop_type == "fixed":
+                    stop_price = float(rule.params.get("value", 0))
+                    if current_price <= stop_price:
+                        should_close = True
+                        reason = f"触发止损: 当前价 {current_price} <= 止损价 {stop_price}"
+                elif stop_type == "percent":
+                    entry_price = float(pos.avg_price)
+                    drop_pct = float(rule.params.get("value", 5))
+                    if entry_price > 0:
+                        drop = (entry_price - current_price) / entry_price * 100
+                        if drop >= drop_pct:
+                            should_close = True
+                            reason = f"触发百分比止损: 跌幅 {drop:.2f}% >= {drop_pct}%"
+
+            elif rule.rule_type == "take_profit":
+                take_type = rule.params.get("take_type", "fixed")
+                if take_type == "fixed":
+                    take_price = float(rule.params.get("value", 0))
+                    if current_price >= take_price:
+                        should_close = True
+                        reason = f"触发止盈: 当前价 {current_price} >= 止盈价 {take_price}"
+                elif take_type == "percent":
+                    entry_price = float(pos.avg_price)
+                    gain_pct = float(rule.params.get("value", 10))
+                    if entry_price > 0:
+                        gain = (current_price - entry_price) / entry_price * 100
+                        if gain >= gain_pct:
+                            should_close = True
+                            reason = f"触发百分比止盈: 涨幅 {gain:.2f}% >= {gain_pct}%"
+
+            if should_close:
+                try:
+                    from app.services.trade.order_manager import close_position
+                    await close_position(db, user_id, str(pos.id))
+                    await _create_alert(db, user_id, rule.strategy_id, "warning", "自动平仓", reason)
+                    await db.commit()
+                except Exception as e:
+                    logger.error("risk.auto_close_failed", error=str(e))

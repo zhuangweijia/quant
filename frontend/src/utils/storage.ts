@@ -1,6 +1,5 @@
 const TOKEN_KEY = "access_token";
 const REFRESH_KEY = "refresh_token";
-const THEME_KEY = "theme";
 
 export const storage = {
   get(key: string, defaultValue: string = ""): string {

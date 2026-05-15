@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onMounted } from "vue";
 import { useMarketStore } from "@/stores/market";
 import { MARKET_LABELS, TIMEFRAME_OPTIONS } from "@/utils/constants";
-import { formatNumber, formatPercent, toNum } from "@/utils/format";
+import { formatNumber, formatPercent, formatDate, toNum } from "@/utils/format";
 import VChart from "vue-echarts";
 import { use } from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
@@ -24,6 +24,10 @@ const loading = ref(false);
 const chartLoading = ref(false);
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+onMounted(() => {
+  store.initWatchlist();
+});
 
 function onSearchInput() {
   if (searchTimer) clearTimeout(searchTimer);
@@ -167,7 +171,7 @@ const klineOption = computed(() => {
     </el-card>
 
     <el-row :gutter="20">
-      <el-col :span="18">
+      <el-col :xs="24" :md="18">
         <el-card shadow="hover" v-loading="chartLoading">
           <template #header>
             <span>{{ store.currentSymbol ? `${store.currentSymbol.symbol} - K线图` : 'K线图' }}</span>
@@ -178,7 +182,7 @@ const klineOption = computed(() => {
           </div>
         </el-card>
       </el-col>
-      <el-col :span="6">
+      <el-col :xs="24" :md="6">
         <el-card shadow="hover">
           <template #header><span>自选列表</span></template>
           <div v-if="store.watchlist.length">
@@ -208,7 +212,7 @@ const klineOption = computed(() => {
               {{ formatNumber(store.tickData.price, toNum(store.tickData.price) < 1 ? 6 : 2) }}
             </div>
             <div class="tick-time" style="font-size: 12px; color: var(--qp-text-secondary)">
-              {{ store.tickData.timestamp ? new Date(store.tickData.timestamp).toLocaleString() : "" }}
+              {{ store.tickData.timestamp ? formatDate(store.tickData.timestamp) : "" }}
             </div>
           </div>
         </el-card>

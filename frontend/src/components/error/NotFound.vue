@@ -1,6 +1,3 @@
-<script setup lang="ts">
-</script>
-
 <template>
   <div class="not-found">
     <el-result icon="warning" title="404" sub-title="页面不存在">

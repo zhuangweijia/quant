@@ -8,6 +8,23 @@ from app.config import get_settings
 
 
 class AuthService:
+    _private_key: str | None = None
+    _public_key: str | None = None
+
+    @classmethod
+    def _get_private_key(cls) -> str:
+        if cls._private_key is None:
+            settings = get_settings()
+            cls._private_key = Path(settings.JWT_PRIVATE_KEY_PATH).read_text()
+        return cls._private_key
+
+    @classmethod
+    def _get_public_key(cls) -> str:
+        if cls._public_key is None:
+            settings = get_settings()
+            cls._public_key = Path(settings.JWT_PUBLIC_KEY_PATH).read_text()
+        return cls._public_key
+
     @classmethod
     def hash_password(cls, password: str) -> str:
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
@@ -28,8 +45,7 @@ class AuthService:
             "exp": expire,
             "type": "access",
         }
-        private_key = Path(settings.JWT_PRIVATE_KEY_PATH).read_text()
-        return jwt.encode(payload, private_key, algorithm=settings.JWT_ALGORITHM)
+        return jwt.encode(payload, cls._get_private_key(), algorithm=settings.JWT_ALGORITHM)
 
     @classmethod
     def create_refresh_token(cls, user_id: str) -> str:
@@ -38,17 +54,15 @@ class AuthService:
             days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS
         )
         payload = {"sub": user_id, "exp": expire, "type": "refresh"}
-        private_key = Path(settings.JWT_PRIVATE_KEY_PATH).read_text()
-        return jwt.encode(payload, private_key, algorithm=settings.JWT_ALGORITHM)
+        return jwt.encode(payload, cls._get_private_key(), algorithm=settings.JWT_ALGORITHM)
 
     @classmethod
     def decode_token(cls, token: str) -> dict | None:
         settings = get_settings()
         try:
-            public_key = Path(settings.JWT_PUBLIC_KEY_PATH).read_text()
             payload = jwt.decode(
-                token, public_key, algorithms=[settings.JWT_ALGORITHM]
+                token, cls._get_public_key(), algorithms=[settings.JWT_ALGORITHM]
             )
             return payload
-        except JWTError:
+        except (JWTError, Exception):
             return None

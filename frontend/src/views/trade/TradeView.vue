@@ -1,16 +1,13 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { useTradeStore } from "@/stores/trade";
-import { MARKET_LABELS, SIDE_LABELS, STATUS_LABELS } from "@/utils/constants";
-import { formatCurrency, formatNumber, formatPercent, toNum } from "@/utils/format";
 import { ElMessage, ElMessageBox } from "element-plus";
+import { formatCurrency, formatDate } from "@/utils/format";
 
-const store = useTradeStore();
-const loading = ref(false);
-const submitting = ref(false);
+const tradeStore = useTradeStore();
 
-const orderForm = reactive({
-  symbol: "",
+const orderForm = ref({
+  symbol: "BTCUSDT",
   market: "crypto",
   side: "buy",
   order_type: "market",
@@ -18,263 +15,237 @@ const orderForm = reactive({
   price: undefined as number | undefined,
 });
 
-onMounted(async () => {
-  loading.value = true;
-  try {
-    await Promise.all([
-      store.fetchAccount(),
-      store.fetchPositions(),
-      store.fetchOrders({ page: 1, page_size: 50 }),
-    ]);
-  } finally {
-    loading.value = false;
-  }
-});
+const orderPage = ref(1);
+const orderPageSize = ref(10);
+
+async function loadData() {
+  await Promise.allSettled([
+    tradeStore.fetchAccount(),
+    tradeStore.fetchPositions(),
+    tradeStore.fetchOrders({ page: orderPage.value, page_size: orderPageSize.value }),
+  ]);
+}
 
 async function handleSubmitOrder() {
-  if (!orderForm.symbol) {
+  if (!orderForm.value.symbol?.trim()) {
     ElMessage.warning("请输入标的代码");
     return;
   }
-  if (orderForm.order_type === "limit" && !orderForm.price) {
-    ElMessage.warning("请输入限价");
+  if (!orderForm.value.qty || orderForm.value.qty <= 0) {
+    ElMessage.warning("数量必须大于0");
     return;
   }
-  try {
-    await ElMessageBox.confirm(
-      `确认提交${SIDE_LABELS[orderForm.side]}订单：${orderForm.symbol} x ${orderForm.qty}`,
-      "确认下单",
-      { confirmButtonText: "确认", cancelButtonText: "取消", type: "warning" }
-    );
-  } catch {
+  if (orderForm.value.order_type === "limit" && !orderForm.value.price) {
+    ElMessage.warning("限价单必须填写价格");
     return;
   }
-  submitting.value = true;
+  const actionText = orderForm.value.side === "buy" ? "买入" : "卖出";
+  await ElMessageBox.confirm(
+    `确认${actionText} ${orderForm.value.qty} ${orderForm.value.symbol}?`,
+    "下单确认",
+    { type: "warning" }
+  );
   try {
-    await store.submitOrder({
-      symbol: orderForm.symbol,
-      market: orderForm.market,
-      side: orderForm.side,
-      order_type: orderForm.order_type,
-      qty: orderForm.qty,
-      price: orderForm.order_type === "limit" ? orderForm.price : undefined,
-    });
-    ElMessage.success("订单已提交");
-    orderForm.symbol = "";
-    orderForm.qty = 1;
-    orderForm.price = undefined;
-    await Promise.all([store.fetchPositions(), store.fetchOrders({ page: 1, page_size: 50 })]);
+    await tradeStore.submitOrder(orderForm.value as any);
+    ElMessage.success("下单成功");
+    await loadData();
   } catch (e: any) {
     ElMessage.error(e.message || "下单失败");
-  } finally {
-    submitting.value = false;
   }
 }
 
-async function handleCancelOrder(id: string) {
+async function handleCancelOrder(orderId: string) {
+  await ElMessageBox.confirm("确认撤单?", "提示", { type: "warning" });
   try {
-    await ElMessageBox.confirm("确认撤单？", "确认", { type: "warning" });
-    await store.cancelOrder(id);
+    await tradeStore.cancelOrder(orderId);
     ElMessage.success("已撤单");
-    await store.fetchOrders({ page: 1, page_size: 50 });
-  } catch {
-    // cancelled
+    await loadData();
+  } catch (e: any) {
+    ElMessage.error(e.message);
   }
 }
 
-async function handleClosePosition(id: string) {
+async function handleClosePosition(positionId: string) {
+  await ElMessageBox.confirm("确认平仓?", "提示", { type: "warning" });
   try {
-    await ElMessageBox.confirm("确认平仓？", "确认", { type: "warning" });
-    await store.closePosition(id);
-    ElMessage.success("已平仓");
-    await Promise.all([store.fetchPositions(), store.fetchAccount()]);
-  } catch {
-    // cancelled
+    await tradeStore.closePosition(positionId);
+    ElMessage.success("平仓成功");
+    await loadData();
+  } catch (e: any) {
+    ElMessage.error(e.message);
   }
 }
 
-const modeLabels: Record<string, string> = {
-  paper: "模拟盘",
-  live: "实盘",
-  backtest: "回测模式",
-};
+function handleOrderPageChange(page: number) {
+  orderPage.value = page;
+  tradeStore.fetchOrders({ page, page_size: orderPageSize.value });
+}
+
+const accountInfo = computed(() => tradeStore.account);
+
+onMounted(() => {
+  loadData();
+});
 </script>
 
 <template>
-  <div class="trade-view" v-loading="loading">
-    <el-row :gutter="20">
-      <el-col :span="8">
-        <el-card shadow="hover" style="margin-bottom: 20px">
-          <template #header>
-            <div class="card-header">
-              <span>账户信息</span>
-              <el-tag
-                :type="store.account?.mode === 'live' ? 'danger' : 'success'"
-                size="small"
-              >
-                {{ modeLabels[store.account?.mode || "paper"] || "模拟盘" }}
-              </el-tag>
+  <div class="trade-page">
+    <el-row :gutter="16">
+      <el-col :xs="24" :md="8">
+        <el-card shadow="hover" class="account-card">
+          <template #header><span>账户信息</span></template>
+          <template v-if="accountInfo">
+            <div class="info-row">
+              <span class="label">总资产</span>
+              <span class="value">{{ formatCurrency(accountInfo.total_equity) }}</span>
             </div>
-          </template>
-          <div v-if="store.account" class="account-info">
-            <div class="account-row">
-              <span class="account-label">总权益</span>
-              <span class="account-value">{{ formatCurrency(store.account.total_equity) }}</span>
+            <div class="info-row">
+              <span class="label">可用资金</span>
+              <span class="value">{{ formatCurrency(accountInfo.cash) }}</span>
             </div>
-            <div class="account-row">
-              <span class="account-label">可用资金</span>
-              <span class="account-value">{{ formatCurrency(store.account.cash) }}</span>
+            <div class="info-row">
+              <span class="label">持仓市值</span>
+              <span class="value">{{ formatCurrency(accountInfo.position_value) }}</span>
             </div>
-            <div class="account-row">
-              <span class="account-label">持仓市值</span>
-              <span class="account-value">{{ formatCurrency(store.account.position_value) }}</span>
-            </div>
-            <div class="account-row">
-              <span class="account-label">日盈亏</span>
-              <span class="account-value" :style="{ color: toNum(store.account.daily_pnl) >= 0 ? 'var(--qp-up)' : 'var(--qp-down)' }">
-                {{ formatCurrency(store.account.daily_pnl) }}
+            <div class="info-row">
+              <span class="label">日盈亏</span>
+              <span class="value" :style="{ color: Number(accountInfo.daily_pnl) >= 0 ? 'var(--qp-up)' : 'var(--qp-down)' }">
+                {{ formatCurrency(accountInfo.daily_pnl) }}
               </span>
             </div>
-          </div>
-          <el-empty v-else description="暂无账户信息" :image-size="60" />
+            <el-tag size="small" type="warning" style="margin-top: 8px">
+              {{ accountInfo.mode === "paper" ? "模拟盘" : "实盘" }}
+            </el-tag>
+          </template>
         </el-card>
 
-        <el-card shadow="hover">
+        <el-card shadow="hover" style="margin-top: 16px">
           <template #header><span>下单</span></template>
-          <el-form :model="orderForm" label-width="70px" size="default">
+          <el-form :model="orderForm" label-width="60px" size="default">
             <el-form-item label="标的">
-              <el-input v-model="orderForm.symbol" placeholder="如 BTC/USDT" />
+              <el-input v-model="orderForm.symbol" />
             </el-form-item>
             <el-form-item label="市场">
               <el-select v-model="orderForm.market" style="width: 100%">
-                <el-option
-                  v-for="(label, value) in MARKET_LABELS"
-                  :key="value"
-                  :label="label"
-                  :value="value"
-                />
+                <el-option label="A股" value="a_stock" />
+                <el-option label="美股" value="us_stock" />
+                <el-option label="加密货币" value="crypto" />
               </el-select>
             </el-form-item>
-            <el-form-item label="订单类型">
+            <el-form-item label="类型">
               <el-radio-group v-model="orderForm.order_type">
-                <el-radio-button value="market">市价</el-radio-button>
-                <el-radio-button value="limit">限价</el-radio-button>
+                <el-radio value="market">市价</el-radio>
+                <el-radio value="limit">限价</el-radio>
               </el-radio-group>
             </el-form-item>
             <el-form-item label="方向">
               <el-radio-group v-model="orderForm.side">
-                <el-radio-button value="buy">买入</el-radio-button>
-                <el-radio-button value="sell">卖出</el-radio-button>
+                <el-radio value="buy">
+                  <span style="color: var(--qp-up)">买入</span>
+                </el-radio>
+                <el-radio value="sell">
+                  <span style="color: var(--qp-down)">卖出</span>
+                </el-radio>
               </el-radio-group>
             </el-form-item>
             <el-form-item label="数量">
-              <el-input-number v-model="orderForm.qty" :min="0.001" :step="1" style="width: 100%" />
+              <el-input-number v-model="orderForm.qty" :min="0.01" :step="1" style="width: 100%" />
             </el-form-item>
             <el-form-item v-if="orderForm.order_type === 'limit'" label="价格">
-              <el-input-number v-model="orderForm.price" :min="0" :precision="2" style="width: 100%" />
+              <el-input-number v-model="orderForm.price" :min="0.01" :precision="2" style="width: 100%" />
             </el-form-item>
-            <el-form-item>
-              <el-button
-                type="primary"
-                :loading="submitting"
-                @click="handleSubmitOrder"
-                style="width: 100%"
-              >
-                {{ SIDE_LABELS[orderForm.side] }} {{ orderForm.order_type === 'limit' ? '限价单' : '市价单' }}
-              </el-button>
-            </el-form-item>
+            <el-button
+              type="primary"
+              style="width: 100%"
+              @click="handleSubmitOrder"
+            >
+              {{ orderForm.side === "buy" ? "买入" : "卖出" }}
+            </el-button>
           </el-form>
         </el-card>
       </el-col>
 
-      <el-col :span="16">
-        <el-card shadow="hover" style="margin-bottom: 20px">
+      <el-col :xs="24" :md="16">
+        <el-card shadow="hover">
           <template #header><span>当前持仓</span></template>
-          <el-table :data="store.positions" stripe size="small">
-            <el-table-column prop="symbol" label="标的" width="120" />
-            <el-table-column label="市场" width="90">
-              <template #default="{ row }">{{ MARKET_LABELS[row.market] || row.market }}</template>
+          <el-table :data="tradeStore.positions" size="small" stripe>
+            <el-table-column prop="symbol" label="标的" width="100" />
+            <el-table-column prop="market" label="市场" width="80">
+              <template #default="{ row }">
+                {{ ({ a_stock: "A股", us_stock: "美股", crypto: "加密" } as Record<string, string>)[row.market] || row.market }}
+              </template>
             </el-table-column>
-            <el-table-column prop="qty" label="数量" width="100">
-              <template #default="{ row }">{{ formatNumber(row.qty, 4) }}</template>
+            <el-table-column label="数量" width="100">
+              <template #default="{ row }">{{ Number(row.qty).toFixed(4) }}</template>
             </el-table-column>
             <el-table-column label="均价" width="110">
-              <template #default="{ row }">{{ formatNumber(row.avg_price) }}</template>
+              <template #default="{ row }">{{ Number(row.avg_price).toFixed(2) }}</template>
             </el-table-column>
             <el-table-column label="市值" width="120">
-              <template #default="{ row }">{{ formatCurrency(toNum(row.qty) * toNum(row.avg_price)) }}</template>
-            </el-table-column>
-            <el-table-column label="未实现盈亏" width="130">
-              <template #default="{ row }">
-                <span :style="{ color: toNum(row.unrealized_pnl) >= 0 ? 'var(--qp-up)' : 'var(--qp-down)' }">
-                  {{ formatCurrency(row.unrealized_pnl) }}
-                </span>
-              </template>
-            </el-table-column>
-            <el-table-column label="盈亏%" width="100">
-              <template #default="{ row }">
-                <span :style="{ color: toNum(row.unrealized_pnl_pct) >= 0 ? 'var(--qp-up)' : 'var(--qp-down)' }">
-                  {{ formatPercent(row.unrealized_pnl_pct) }}
-                </span>
-              </template>
+              <template #default="{ row }">{{ formatCurrency(Number(row.qty) * Number(row.avg_price)) }}</template>
             </el-table-column>
             <el-table-column label="操作" width="80" fixed="right">
               <template #default="{ row }">
-                <el-button size="small" type="danger" @click="handleClosePosition(row.id)">平仓</el-button>
+                <el-button link type="danger" size="small" @click="handleClosePosition(row.id)">平仓</el-button>
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-if="!store.positions.length" description="暂无持仓" :image-size="60" />
+          <el-empty v-if="!tradeStore.positions.length" description="暂无持仓" :image-size="60" />
         </el-card>
 
-        <el-card shadow="hover">
-          <template #header><span>委托记录</span></template>
-          <el-table :data="store.orders" stripe size="small">
-            <el-table-column prop="symbol" label="标的" width="100" />
+        <el-card shadow="hover" style="margin-top: 16px">
+          <template #header><span>订单记录</span></template>
+          <el-table :data="tradeStore.orders" size="small" stripe>
+            <el-table-column prop="symbol" label="标的" width="90" />
             <el-table-column label="方向" width="60">
               <template #default="{ row }">
                 <span :style="{ color: row.side === 'buy' ? 'var(--qp-up)' : 'var(--qp-down)' }">
-                  {{ SIDE_LABELS[row.side] || row.side }}
+                  {{ row.side === "buy" ? "买入" : "卖出" }}
                 </span>
               </template>
             </el-table-column>
             <el-table-column label="类型" width="60">
-              <template #default="{ row }">{{ row.order_type === "market" ? "市价" : "限价" }}</template>
+              <template #default="{ row }">{{ ({ market: "市价", limit: "限价", stop: "止损" } as Record<string, string>)[row.order_type] || row.order_type }}</template>
             </el-table-column>
-            <el-table-column prop="qty" label="数量" width="80">
-              <template #default="{ row }">{{ formatNumber(row.qty, 4) }}</template>
+            <el-table-column label="数量" width="80">
+              <template #default="{ row }">{{ Number(row.qty).toFixed(2) }}</template>
             </el-table-column>
-            <el-table-column label="价格" width="100">
-              <template #default="{ row }">{{ row.price ? formatNumber(row.price) : "-" }}</template>
+            <el-table-column label="成交价" width="90">
+              <template #default="{ row }">{{ row.filled_price ? Number(row.filled_price).toFixed(2) : "-" }}</template>
             </el-table-column>
-            <el-table-column label="成交价" width="100">
-              <template #default="{ row }">{{ row.filled_price ? formatNumber(row.filled_price) : "-" }}</template>
+            <el-table-column label="手续费" width="80">
+              <template #default="{ row }">{{ Number(row.commission).toFixed(4) }}</template>
             </el-table-column>
-            <el-table-column label="状态" width="90">
+            <el-table-column label="状态" width="80">
               <template #default="{ row }">
-                <el-tag :type="(STATUS_LABELS[row.status]?.type as any) || 'info'" size="small">
-                  {{ STATUS_LABELS[row.status]?.label || row.status }}
+                <el-tag size="small" :type="row.status === 'filled' ? 'success' : row.status === 'cancelled' ? 'danger' : 'info'">
+                  {{ ({ filled: "已成交", pending: "待成交", submitted: "已提交", partial_filled: "部分成交", cancelled: "已撤单", rejected: "已拒绝" } as Record<string, string>)[row.status] || row.status }}
                 </el-tag>
               </template>
             </el-table-column>
             <el-table-column label="时间" min-width="140">
-              <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
+              <template #default="{ row }">{{ formatDate(row.created_at) }}</template>
             </el-table-column>
-            <el-table-column label="操作" width="70" fixed="right">
+            <el-table-column label="操作" width="60" fixed="right">
               <template #default="{ row }">
                 <el-button
                   v-if="row.status === 'pending' || row.status === 'submitted'"
-                  size="small"
-                  type="danger"
-                  text
+                  link type="danger" size="small"
                   @click="handleCancelOrder(row.id)"
-                >
-                  撤单
-                </el-button>
+                >撤单</el-button>
               </template>
             </el-table-column>
           </el-table>
-          <el-empty v-if="!store.orders.length" description="暂无委托记录" :image-size="60" />
+          <div style="margin-top: 12px; text-align: center" v-if="tradeStore.orders.length">
+            <el-pagination
+              small
+              layout="prev, pager, next"
+              :current-page="orderPage"
+              :page-size="orderPageSize"
+              :total="tradeStore.ordersTotal"
+              @current-change="handleOrderPageChange"
+            />
+          </div>
         </el-card>
       </el-col>
     </el-row>
@@ -282,33 +253,26 @@ const modeLabels: Record<string, string> = {
 </template>
 
 <style scoped lang="scss">
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.trade-page {
+  max-width: 1400px;
 }
 
-.account-info {
-  .account-row {
+.account-card {
+  .info-row {
     display: flex;
     justify-content: space-between;
-    align-items: center;
     padding: 6px 0;
-    border-bottom: 1px solid var(--qp-border-color);
+    border-bottom: 1px solid #f5f5f5;
 
-    &:last-child {
-      border-bottom: none;
+    .label {
+      color: var(--qp-text-secondary);
+      font-size: 13px;
     }
-  }
 
-  .account-label {
-    color: var(--qp-text-secondary);
-    font-size: 14px;
-  }
-
-  .account-value {
-    font-weight: 600;
-    font-size: 14px;
+    .value {
+      font-weight: 500;
+      font-size: 14px;
+    }
   }
 }
 </style>

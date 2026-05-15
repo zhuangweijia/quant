@@ -1,364 +1,247 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { useRiskStore } from "@/stores/risk";
-import { strategyApi } from "@/api/strategy";
+import { useStrategyStore } from "@/stores/strategy";
 import { ElMessage, ElMessageBox } from "element-plus";
-import type { StrategyListItem } from "@/types/strategy";
-import type { RiskRuleCreateRequest } from "@/types/risk";
+import { formatDate } from "@/utils/format";
 
-const store = useRiskStore();
-const loading = ref(false);
-const dialogVisible = ref(false);
-const editDialogVisible = ref(false);
+const riskStore = useRiskStore();
+const strategyStore = useStrategyStore();
+
+const ruleDialog = ref(false);
 const editingRule = ref<any>(null);
-const strategies = ref<StrategyListItem[]>([]);
-const alertFilter = ref("");
-const alertLoading = ref(false);
-
-const ruleForm = reactive<RiskRuleCreateRequest>({
+const ruleForm = ref({
   name: "",
-  rule_type: "max_drawdown",
-  scope: "global",
-  strategy_id: undefined,
-  params: {},
-});
-const ruleParamsJson = ref("{}");
-
-const editForm = reactive({
-  name: "",
+  rule_type: "max_position_value",
+  strategy_id: null as string | null,
   params: {} as Record<string, any>,
 });
-const editParamsJson = ref("{}");
 
-const ruleTypes = [
-  { label: "最大回撤", value: "max_drawdown" },
-  { label: "最大持仓", value: "max_position" },
-  { label: "日亏损限制", value: "daily_loss" },
-  { label: "单笔止损", value: "stop_loss" },
-  { label: "价格波动", value: "price_alert" },
-];
+const alertFilter = ref("");
+const alertPage = ref(1);
+const ruleSaving = ref(false);
+const ruleDeleting = ref<string | null>(null);
 
-const levelOptions = [
-  { label: "低", value: "low" },
-  { label: "中", value: "medium" },
-  { label: "高", value: "high" },
-];
+const RULE_TYPES: Record<string, { label: string; params: Record<string, { label: string; type: string; default: any }> }> = {
+  max_position_value: { label: "单标的持仓限额", params: { max_value: { label: "最大金额", type: "number", default: 100000 } } },
+  max_position_ratio: { label: "总仓位比例", params: { max_ratio: { label: "最大比例", type: "number", default: 0.8 } } },
+  daily_loss_limit: { label: "日亏损限制", params: { max_daily_loss: { label: "最大日亏损", type: "number", default: 10000 } } },
+  daily_trade_limit: { label: "日交易次数限制", params: { max_trades: { label: "最大次数", type: "number", default: 20 } } },
+  blacklist: { label: "交易黑名单", params: { symbols: { label: "标的列表", type: "array", default: [] } } },
+  max_order_amount: { label: "单笔金额限制", params: { max_amount: { label: "最大金额", type: "number", default: 50000 } } },
+  stop_loss: { label: "止损规则", params: { stop_type: { label: "类型", type: "select", default: "fixed" }, value: { label: "止损值", type: "number", default: 0 } } },
+  take_profit: { label: "止盈规则", params: { take_type: { label: "类型", type: "select", default: "fixed" }, value: { label: "止盈值", type: "number", default: 0 } } },
+};
 
-const globalRules = computed(() => store.rules.filter((r) => r.scope === "global"));
-const strategyRules = computed(() => store.rules.filter((r) => r.scope === "strategy"));
-const filteredAlerts = computed(() => {
-  if (!alertFilter.value) return store.alerts;
-  return store.alerts.filter((a) => a.level === alertFilter.value);
-});
-
-onMounted(async () => {
-  loading.value = true;
-  try {
-    await Promise.all([store.fetchRules(), store.fetchAlerts({ page: 1, page_size: 50 })]);
-    const res: any = await strategyApi.list();
-    strategies.value = res.data.items || [];
-  } finally {
-    loading.value = false;
-  }
-});
-
-async function handleToggle(rule: any) {
-  try {
-    await store.toggleRule(rule.id);
-    ElMessage.success(rule.is_enabled ? "已禁用" : "已启用");
-  } catch (e: any) {
-    ElMessage.error(e.message || "操作失败");
+function initRuleForm(ruleType: string) {
+  const config = RULE_TYPES[ruleType];
+  if (config) {
+    ruleForm.value.params = {};
+    for (const [key, p] of Object.entries(config.params)) {
+      ruleForm.value.params[key] = p.default;
+    }
   }
 }
 
-async function handleDelete(id: string) {
-  try {
-    await ElMessageBox.confirm("确定删除该规则？", "确认", { type: "warning" });
-    await store.deleteRule(id);
-    ElMessage.success("已删除");
-  } catch {
-    // cancelled
-  }
+function openCreateRule() {
+  editingRule.value = null;
+  ruleForm.value = { name: "", rule_type: "max_position_value", strategy_id: null, params: {} };
+  initRuleForm("max_position_value");
+  ruleDialog.value = true;
 }
 
-function openCreateDialog() {
-  ruleForm.name = "";
-  ruleForm.rule_type = "max_drawdown";
-  ruleForm.scope = "global";
-  ruleForm.strategy_id = undefined;
-  ruleForm.params = {};
-  ruleParamsJson.value = "{}";
-  dialogVisible.value = true;
-}
-
-async function handleCreate() {
-  if (!ruleForm.name) {
-    ElMessage.warning("请输入规则名称");
-    return;
-  }
-  try {
-    ruleForm.params = JSON.parse(ruleParamsJson.value || "{}");
-    await store.createRule({ ...ruleForm });
-    ElMessage.success("规则已创建");
-    dialogVisible.value = false;
-  } catch (e: any) {
-    ElMessage.error(e.message || "创建失败");
-  }
-}
-
-function openEditDialog(rule: any) {
+function openEditRule(rule: any) {
   editingRule.value = rule;
-  editForm.name = rule.name;
-  editForm.params = { ...rule.params };
-  editParamsJson.value = JSON.stringify(rule.params, null, 2);
-  editDialogVisible.value = true;
+  ruleForm.value = {
+    name: rule.name || "",
+    rule_type: rule.rule_type,
+    strategy_id: rule.strategy_id,
+    params: { ...rule.params },
+  };
+  ruleDialog.value = true;
 }
 
-async function handleUpdate() {
-  if (!editingRule.value) return;
+async function saveRule() {
+  ruleSaving.value = true;
   try {
-    editForm.params = JSON.parse(editParamsJson.value || "{}");
-    await store.updateRule(editingRule.value.id, {
-      name: editForm.name,
-      params: editForm.params,
-    });
-    ElMessage.success("规则已更新");
-    editDialogVisible.value = false;
+    if (editingRule.value) {
+      await riskStore.updateRule(editingRule.value.id, { name: ruleForm.value.name, params: ruleForm.value.params });
+    } else {
+      await riskStore.createRule({
+        name: ruleForm.value.name || RULE_TYPES[ruleForm.value.rule_type]?.label || ruleForm.value.rule_type,
+        rule_type: ruleForm.value.rule_type,
+        scope: ruleForm.value.strategy_id ? "strategy" : "global",
+        strategy_id: ruleForm.value.strategy_id || undefined,
+        params: ruleForm.value.params,
+      });
+    }
+    ruleDialog.value = false;
+    ElMessage.success("保存成功");
   } catch (e: any) {
-    ElMessage.error(e.message || "更新失败");
+    ElMessage.error(e.message);
+  } finally {
+    ruleSaving.value = false;
   }
 }
 
-async function handleMarkRead(id: string) {
+async function deleteRule(id: string) {
+  await ElMessageBox.confirm("确认删除该规则?", "提示", { type: "warning" });
+  ruleDeleting.value = id;
   try {
-    await store.markAlertRead(id);
-  } catch (e: any) {
-    ElMessage.error(e.message || "操作失败");
+    await riskStore.deleteRule(id);
+    ElMessage.success("已删除");
+  } finally {
+    ruleDeleting.value = null;
   }
 }
 
-async function handleMarkAllRead() {
-  try {
-    await store.markAllAlertsRead();
-    ElMessage.success("已全部标记已读");
-  } catch (e: any) {
-    ElMessage.error(e.message || "操作失败");
-  }
+async function loadAlerts() {
+  await riskStore.fetchAlerts({
+    page: alertPage.value,
+    page_size: 20,
+    level: alertFilter.value || undefined,
+  });
 }
 
-function getRuleTypeLabel(type: string) {
-  return ruleTypes.find((t) => t.value === type)?.label || type;
-}
-
-function formatParams(params: Record<string, any>) {
-  return Object.entries(params)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join(", ");
-}
+onMounted(() => {
+  riskStore.fetchRules();
+  loadAlerts();
+  strategyStore.fetchStrategies();
+});
 </script>
 
 <template>
-  <div class="risk-view" v-loading="loading">
-    <el-card shadow="hover" style="margin-bottom: 20px">
-      <template #header>
-        <div class="card-header">
-          <span>风控规则</span>
-          <el-button type="primary" size="small" @click="openCreateDialog">添加规则</el-button>
-        </div>
-      </template>
+  <div class="risk-page">
+    <el-row :gutter="16">
+      <el-col :xs="24" :md="16">
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; justify-content: space-between; align-items: center">
+              <span>风控规则</span>
+              <el-button type="primary" size="small" @click="openCreateRule">新增规则</el-button>
+            </div>
+          </template>
 
-      <div v-if="globalRules.length">
-        <h4 class="rule-group-title">全局规则</h4>
-        <el-row :gutter="16">
-          <el-col :span="8" v-for="rule in globalRules" :key="rule.id">
-            <el-card shadow="hover" class="rule-card">
+          <h4 style="margin-bottom: 12px; color: var(--qp-text-secondary)">全局规则</h4>
+          <div class="rule-grid">
+            <el-card v-for="rule in riskStore.rules.filter((r: any) => !r.strategy_id)" :key="rule.id" shadow="hover" class="rule-card">
               <div class="rule-header">
-                <span class="rule-name">{{ rule.name }}</span>
-                <el-switch
-                  :model-value="rule.is_enabled"
-                  size="small"
-                  @change="handleToggle(rule)"
-                />
+                <el-tag size="small">{{ RULE_TYPES[rule.rule_type]?.label || rule.rule_type }}</el-tag>
+                <el-switch v-model="rule.is_enabled" size="small" @change="riskStore.toggleRule(rule.id)" />
               </div>
-              <div class="rule-type">
-                <el-tag size="small">{{ getRuleTypeLabel(rule.rule_type) }}</el-tag>
-              </div>
-              <div class="rule-params" v-if="Object.keys(rule.params).length">
-                {{ formatParams(rule.params) }}
+              <div class="rule-params">
+                <span v-for="(val, key) in rule.params" :key="key" class="param-item">
+                  {{ key }}: {{ Array.isArray(val) ? val.join(", ") : val }}
+                </span>
               </div>
               <div class="rule-actions">
-                <el-button text size="small" @click="openEditDialog(rule)">编辑</el-button>
-                <el-button text size="small" type="danger" @click="handleDelete(rule.id)">删除</el-button>
+                <el-button link type="primary" size="small" @click="openEditRule(rule)">编辑</el-button>
+                <el-button link type="danger" size="small" :loading="ruleDeleting === rule.id" @click="deleteRule(rule.id)">删除</el-button>
               </div>
             </el-card>
-          </el-col>
-        </el-row>
-      </div>
-
-      <div v-if="strategyRules.length" style="margin-top: 16px">
-        <h4 class="rule-group-title">策略规则</h4>
-        <el-row :gutter="16">
-          <el-col :span="8" v-for="rule in strategyRules" :key="rule.id">
-            <el-card shadow="hover" class="rule-card">
-              <div class="rule-header">
-                <span class="rule-name">{{ rule.name }}</span>
-                <el-switch
-                  :model-value="rule.is_enabled"
-                  size="small"
-                  @change="handleToggle(rule)"
-                />
-              </div>
-              <div class="rule-type">
-                <el-tag size="small">{{ getRuleTypeLabel(rule.rule_type) }}</el-tag>
-                <el-tag size="small" type="info" style="margin-left: 4px">
-                  {{ strategies.find((s) => s.id === rule.strategy_id)?.name || rule.strategy_id || "-" }}
-                </el-tag>
-              </div>
-              <div class="rule-params" v-if="Object.keys(rule.params).length">
-                {{ formatParams(rule.params) }}
-              </div>
-              <div class="rule-actions">
-                <el-button text size="small" @click="openEditDialog(rule)">编辑</el-button>
-                <el-button text size="small" type="danger" @click="handleDelete(rule.id)">删除</el-button>
-              </div>
-            </el-card>
-          </el-col>
-        </el-row>
-      </div>
-
-      <el-empty v-if="!store.rules.length" description="暂无风控规则" />
-    </el-card>
-
-    <el-card shadow="hover">
-      <template #header>
-        <div class="card-header">
-          <span>风控告警</span>
-          <div>
-            <el-select v-model="alertFilter" placeholder="筛选等级" clearable size="small" style="width: 120px; margin-right: 8px">
-              <el-option v-for="l in levelOptions" :key="l.value" :label="l.label" :value="l.value" />
-            </el-select>
-            <el-button size="small" @click="handleMarkAllRead" :disabled="!store.alerts.length">
-              全部已读
-            </el-button>
+            <el-empty v-if="!riskStore.rules.filter((r: any) => !r.strategy_id).length" description="暂无全局规则" :image-size="40" />
           </div>
-        </div>
-      </template>
 
-      <el-table :data="filteredAlerts" stripe size="small">
-        <el-table-column prop="rule_name" label="规则" width="140" />
-        <el-table-column prop="message" label="告警信息" min-width="200" />
-        <el-table-column label="等级" width="80">
-          <template #default="{ row }">
-            <el-tag
-              :type="row.level === 'high' ? 'danger' : row.level === 'medium' ? 'warning' : 'info'"
-              size="small"
-            >
-              {{ row.level === "high" ? "高" : row.level === "medium" ? "中" : "低" }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.is_read ? 'info' : 'warning'" size="small">
-              {{ row.is_read ? "已读" : "未读" }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="时间" width="160">
-          <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="70" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="!row.is_read" text size="small" type="primary" @click="handleMarkRead(row.id)">
-              已读
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-if="!store.alerts.length" description="暂无告警" :image-size="60" />
-    </el-card>
+          <el-divider />
 
-    <el-dialog v-model="dialogVisible" title="添加风控规则" width="500px" destroy-on-close>
-      <el-form :model="ruleForm" label-width="90px">
+          <h4 style="margin-bottom: 12px; color: var(--qp-text-secondary)">策略规则</h4>
+          <div class="rule-grid">
+            <el-card v-for="rule in riskStore.rules.filter((r: any) => r.strategy_id)" :key="rule.id" shadow="hover" class="rule-card">
+              <div class="rule-header">
+                <el-tag size="small">{{ RULE_TYPES[rule.rule_type]?.label || rule.rule_type }}</el-tag>
+                <el-switch v-model="rule.is_enabled" size="small" @change="riskStore.toggleRule(rule.id)" />
+              </div>
+              <div class="rule-params">
+                <span v-for="(val, key) in rule.params" :key="key" class="param-item">
+                  {{ key }}: {{ Array.isArray(val) ? val.join(", ") : val }}
+                </span>
+              </div>
+              <div class="rule-actions">
+                <el-button link type="primary" size="small" @click="openEditRule(rule)">编辑</el-button>
+                <el-button link type="danger" size="small" :loading="ruleDeleting === rule.id" @click="deleteRule(rule.id)">删除</el-button>
+              </div>
+            </el-card>
+            <el-empty v-if="!riskStore.rules.filter((r: any) => r.strategy_id).length" description="暂无策略规则" :image-size="40" />
+          </div>
+        </el-card>
+      </el-col>
+
+      <el-col :xs="24" :md="8">
+        <el-card shadow="hover">
+          <template #header>
+            <div style="display: flex; justify-content: space-between; align-items: center">
+              <span>告警</span>
+              <div>
+                <el-select v-model="alertFilter" placeholder="筛选级别" size="small" clearable style="width: 100px; margin-right: 8px" @change="loadAlerts">
+                  <el-option label="低" value="low" />
+                  <el-option label="中" value="medium" />
+                  <el-option label="高" value="high" />
+                </el-select>
+                <el-button size="small" @click="riskStore.markAllAlertsRead(); loadAlerts()">全部已读</el-button>
+              </div>
+            </div>
+          </template>
+          <div class="alert-list">
+            <div v-for="alert in riskStore.alerts" :key="alert.id" class="alert-item" :class="{ unread: !alert.is_read }">
+              <div class="alert-header">
+                <el-tag size="small" :type="({ low: 'info', medium: 'warning', high: 'danger' }[alert.level as string] ?? 'info') as any">
+                  {{ alert.level }}
+                </el-tag>
+                <span class="alert-time">{{ formatDate(alert.created_at) }}</span>
+              </div>
+              <div class="alert-title">{{ alert.rule_name || '告警' }}</div>
+              <div class="alert-message">{{ alert.message }}</div>
+              <el-button v-if="!alert.is_read" link type="primary" size="small" @click="riskStore.markAlertRead(alert.id)">标记已读</el-button>
+            </div>
+            <el-empty v-if="!riskStore.alerts.length" description="暂无告警" :image-size="60" />
+          </div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-dialog v-model="ruleDialog" :title="editingRule ? '编辑规则' : '新增规则'" width="500px" destroy-on-close>
+      <el-form :model="ruleForm" label-width="80px">
         <el-form-item label="规则名称">
-          <el-input v-model="ruleForm.name" placeholder="输入规则名称" />
+          <el-input v-model="ruleForm.name" :placeholder="RULE_TYPES[ruleForm.rule_type]?.label || '规则名称'" />
         </el-form-item>
-        <el-form-item label="规则类型">
-          <el-select v-model="ruleForm.rule_type" style="width: 100%">
-            <el-option v-for="t in ruleTypes" :key="t.value" :label="t.label" :value="t.value" />
+        <el-form-item v-if="!editingRule" label="规则类型">
+          <el-select v-model="ruleForm.rule_type" style="width: 100%" @change="initRuleForm(ruleForm.rule_type)">
+            <el-option v-for="(config, key) in RULE_TYPES" :key="key" :label="config.label" :value="key" />
           </el-select>
         </el-form-item>
-        <el-form-item label="作用范围">
-          <el-radio-group v-model="ruleForm.scope">
-            <el-radio value="global">全局</el-radio>
-            <el-radio value="strategy">策略</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="ruleForm.scope === 'strategy'" label="策略">
-          <el-select v-model="ruleForm.strategy_id" placeholder="选择策略" style="width: 100%">
-            <el-option v-for="s in strategies" :key="s.id" :label="s.name" :value="s.id" />
+        <el-form-item v-if="!editingRule" label="策略">
+          <el-select v-model="ruleForm.strategy_id" clearable placeholder="全局规则" style="width: 100%">
+            <el-option v-for="s in strategyStore.strategies" :key="s.id" :label="s.name" :value="s.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="参数 (JSON)">
-          <el-input
-            v-model="ruleParamsJson"
-            type="textarea"
-            :rows="3"
-            placeholder='{"threshold": 0.1}'
-            style="font-family: 'Courier New', monospace"
-          />
+        <el-form-item v-for="(config, key) in RULE_TYPES[ruleForm.rule_type]?.params" :key="key" :label="config.label">
+          <el-input-number v-if="config.type === 'number'" v-model="ruleForm.params[key]" style="width: 100%" />
+          <el-select v-else-if="config.type === 'select'" v-model="ruleForm.params[key]" style="width: 100%">
+            <el-option label="固定值" value="fixed" />
+            <el-option label="百分比" value="percent" />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleCreate">创建</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="editDialogVisible" title="编辑风控规则" width="500px" destroy-on-close>
-      <el-form :model="editForm" label-width="90px">
-        <el-form-item label="规则名称">
-          <el-input v-model="editForm.name" />
-        </el-form-item>
-        <el-form-item label="参数 (JSON)">
-          <el-input
-            v-model="editParamsJson"
-            type="textarea"
-            :rows="3"
-            style="font-family: 'Courier New', monospace"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="editDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleUpdate">保存</el-button>
+        <el-button @click="ruleDialog = false">取消</el-button>
+        <el-button type="primary" :loading="ruleSaving" @click="saveRule">保存</el-button>
       </template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped lang="scss">
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.risk-page {
+  max-width: 1400px;
 }
 
-.rule-group-title {
-  font-size: 14px;
-  color: var(--qp-text-secondary);
-  margin: 0 0 12px;
-  padding-left: 4px;
-  border-left: 3px solid var(--qp-primary);
+.rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
 }
 
 .rule-card {
-  margin-bottom: 12px;
-
-  :deep(.el-card__body) {
-    padding: 12px;
-  }
-
   .rule-header {
     display: flex;
     justify-content: space-between;
@@ -366,25 +249,61 @@ function formatParams(params: Record<string, any>) {
     margin-bottom: 8px;
   }
 
-  .rule-name {
-    font-weight: 600;
-    font-size: 14px;
-  }
-
-  .rule-type {
-    margin-bottom: 6px;
-  }
-
   .rule-params {
     font-size: 12px;
     color: var(--qp-text-secondary);
     margin-bottom: 8px;
-    word-break: break-all;
+
+    .param-item {
+      display: inline-block;
+      margin-right: 12px;
+    }
   }
 
   .rule-actions {
+    border-top: 1px solid #f0f0f0;
+    padding-top: 8px;
+  }
+}
+
+.alert-list {
+  max-height: 600px;
+  overflow-y: auto;
+}
+
+.alert-item {
+  padding: 10px 0;
+  border-bottom: 1px solid #f5f5f5;
+
+  &.unread {
+    background: #f0f7ff;
+    margin: 0 -12px;
+    padding: 10px 12px;
+    border-radius: 4px;
+  }
+
+  .alert-header {
     display: flex;
-    gap: 4px;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+
+  .alert-time {
+    font-size: 11px;
+    color: var(--qp-text-secondary);
+  }
+
+  .alert-title {
+    font-size: 13px;
+    font-weight: 500;
+    margin-bottom: 2px;
+  }
+
+  .alert-message {
+    font-size: 12px;
+    color: var(--qp-text-secondary);
+    margin-bottom: 4px;
   }
 }
 </style>

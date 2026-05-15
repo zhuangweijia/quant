@@ -34,3 +34,16 @@ export function formatCompactNumber(value: any): string {
   if (Math.abs(n) >= 1e4) return `${(n / 1e4).toFixed(2)}万`;
   return formatNumber(n);
 }
+
+export function formatDate(value: any, format: string = "YYYY-MM-DD HH:mm:ss"): string {
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return "-";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return format
+    .replace("YYYY", String(d.getFullYear()))
+    .replace("MM", pad(d.getMonth() + 1))
+    .replace("DD", pad(d.getDate()))
+    .replace("HH", pad(d.getHours()))
+    .replace("mm", pad(d.getMinutes()))
+    .replace("ss", pad(d.getSeconds()));
+}

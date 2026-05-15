@@ -1,25 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
 
 from app.api.deps import CurrentUser, DBSession
 from app.schemas.common import ResponseBase
 
 router = APIRouter()
-
-_DEFAULT_PARAMS = {
-    "max_strategies_per_user": "50",
-    "max_running_strategies": "10",
-    "max_concurrent_backtests": "3",
-    "backtest_timeout": "600",
-    "order_timeout": "30",
-    "paper_initial_capital": "1000000",
-    "default_commission_a_stock": "0.00025",
-    "default_commission_us_stock": "0.005",
-    "default_commission_crypto": "0.001",
-    "data_retention_days": "30",
-    "alert_retention_days": "90",
-}
 
 
 class BrokerConfigRequest(BaseModel):
@@ -59,21 +44,25 @@ class SystemParamsRequest(BaseModel):
 
 @router.get("/brokers", response_model=ResponseBase[list[dict]])
 async def get_brokers(user: CurrentUser, db: DBSession):
+    from app.services.settings_service import get_settings_category
+    binance_config = await get_settings_category(db, user.id, "broker:binance")
+    alpaca_config = await get_settings_category(db, user.id, "broker:alpaca")
+
     brokers = [
         {
             "broker_name": "binance",
             "market": "crypto",
-            "api_key": "",
-            "has_secret": False,
-            "params": {"network": "mainnet"},
+            "api_key": binance_config.get("api_key", ""),
+            "has_secret": bool(binance_config.get("api_secret")),
+            "params": {"network": binance_config.get("network", "mainnet")},
             "connected": False,
         },
         {
             "broker_name": "alpaca",
             "market": "us_stock",
-            "api_key": "",
-            "has_secret": False,
-            "params": {"environment": "paper"},
+            "api_key": alpaca_config.get("api_key", ""),
+            "has_secret": bool(alpaca_config.get("api_secret")),
+            "params": {"environment": alpaca_config.get("environment", "paper")},
             "connected": False,
         },
         {
@@ -94,6 +83,17 @@ async def save_broker_config(
 ):
     if broker_name not in ("binance", "alpaca", "akshare"):
         raise HTTPException(status_code=400, detail="不支持的交易所")
+
+    from app.services.settings_service import set_setting
+    category = f"broker:{broker_name}"
+    if payload.api_key:
+        await set_setting(db, user.id, category, "api_key", payload.api_key, encrypted=True)
+    if payload.api_secret:
+        await set_setting(db, user.id, category, "api_secret", payload.api_secret, encrypted=True)
+    if payload.params:
+        import json
+        await set_setting(db, user.id, category, "extra_params", json.dumps(payload.params))
+
     return ResponseBase(data={"broker_name": broker_name, "saved": True})
 
 
@@ -132,49 +132,87 @@ async def set_trading_mode(user: CurrentUser, db: DBSession, payload: TradingMod
 
 @router.get("/notifications", response_model=ResponseBase[dict])
 async def get_notifications(user: CurrentUser, db: DBSession):
+    from app.services.settings_service import get_settings_category
+    config = await get_settings_category(db, user.id, "notification")
     return ResponseBase(data={
-        "email_enabled": False,
-        "email_smtp_host": "",
-        "email_smtp_port": 465,
-        "email_sender": "",
-        "has_email_password": False,
-        "email_use_ssl": True,
-        "email_recipient": "",
-        "webhook_enabled": False,
-        "webhook_url": "",
-        "has_webhook_secret": False,
-        "notify_levels": ["warning", "error"],
+        "email_enabled": config.get("email_enabled", "false").lower() == "true",
+        "email_smtp_host": config.get("email_smtp_host", ""),
+        "email_smtp_port": int(config.get("email_smtp_port", "465")),
+        "email_sender": config.get("email_sender", ""),
+        "has_email_password": bool(config.get("email_password")),
+        "email_use_ssl": config.get("email_use_ssl", "true").lower() == "true",
+        "email_recipient": config.get("email_recipient", ""),
+        "webhook_enabled": config.get("webhook_enabled", "false").lower() == "true",
+        "webhook_url": config.get("webhook_url", ""),
+        "has_webhook_secret": bool(config.get("webhook_secret")),
+        "notify_levels": config.get("notify_levels", "warning,error").split(","),
     })
 
 
 @router.put("/notifications", response_model=ResponseBase[dict])
 async def save_notifications(user: CurrentUser, db: DBSession, payload: NotificationConfigRequest):
+    from app.services.settings_service import set_setting
+    pairs = {
+        "email_enabled": str(payload.email_enabled).lower(),
+        "email_smtp_host": payload.email_smtp_host,
+        "email_smtp_port": str(payload.email_smtp_port),
+        "email_sender": payload.email_sender,
+        "email_use_ssl": str(payload.email_use_ssl).lower(),
+        "email_recipient": payload.email_recipient,
+        "webhook_enabled": str(payload.webhook_enabled).lower(),
+        "webhook_url": payload.webhook_url,
+        "notify_levels": ",".join(payload.notify_levels),
+    }
+    for key, value in pairs.items():
+        await set_setting(db, user.id, "notification", key, value)
+
+    if payload.email_password:
+        await set_setting(db, user.id, "notification", "email_password", payload.email_password, encrypted=True)
+    if payload.webhook_secret:
+        await set_setting(db, user.id, "notification", "webhook_secret", payload.webhook_secret, encrypted=True)
+
     return ResponseBase(data={"saved": True})
 
 
 @router.post("/notifications/test-email", response_model=ResponseBase[dict])
 async def test_email(user: CurrentUser, db: DBSession):
-    return ResponseBase(data={"sent": False, "message": "SMTP 未配置"})
+    from app.services.notification_service import send_email
+    success = await send_email(db, user.id, "QuantPlatform 测试邮件", "<h2>测试成功</h2><p>邮件通知配置正常。</p>")
+    return ResponseBase(data={"sent": success})
 
 
 @router.post("/notifications/test-webhook", response_model=ResponseBase[dict])
 async def test_webhook(user: CurrentUser, db: DBSession):
-    return ResponseBase(data={"sent": False, "message": "Webhook 未配置"})
+    from app.services.notification_service import send_webhook
+    success = await send_webhook(db, user.id, "test", {"message": "QuantPlatform Webhook 测试"})
+    return ResponseBase(data={"sent": success})
 
 
 @router.get("/params", response_model=ResponseBase[dict])
 async def get_params(user: CurrentUser, db: DBSession):
-    return ResponseBase(data=_DEFAULT_PARAMS)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可操作系统参数")
+    from app.services.settings_service import get_system_params
+    params = await get_system_params(db)
+    return ResponseBase(data=params)
 
 
 @router.put("/params", response_model=ResponseBase[dict])
 async def save_params(user: CurrentUser, db: DBSession, payload: SystemParamsRequest):
-    return ResponseBase(data=payload.params)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可操作系统参数")
+    from app.services.settings_service import save_system_params
+    params = await save_system_params(db, payload.params)
+    return ResponseBase(data=params)
 
 
 @router.post("/params/reset", response_model=ResponseBase[dict])
 async def reset_params(user: CurrentUser, db: DBSession):
-    return ResponseBase(data=_DEFAULT_PARAMS)
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可操作系统参数")
+    from app.services.settings_service import reset_system_params
+    params = await reset_system_params(db)
+    return ResponseBase(data=params)
 
 
 @router.get("/profile", response_model=ResponseBase[dict])

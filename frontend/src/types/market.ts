@@ -18,3 +18,10 @@ export interface TickPrice {
   price: string;
   timestamp: string;
 }
+
+export interface WatchlistItem {
+  id: string;
+  symbol: string;
+  market: string;
+  sort_order: number;
+}

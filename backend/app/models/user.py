@@ -16,7 +16,7 @@ class User(UUIDMixin, TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(16), default="trader", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     login_failed_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    locked_until: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     strategies = relationship("Strategy", back_populates="user", lazy="selectin")
     positions = relationship("Position", back_populates="user", lazy="selectin")

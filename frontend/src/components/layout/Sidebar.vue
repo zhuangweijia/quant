@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { useRiskStore } from "@/stores/risk";
 import {
   Odometer,
   TrendCharts,
@@ -15,6 +16,8 @@ defineProps<{ collapsed: boolean }>();
 defineEmits<{ (e: "toggle"): void }>();
 
 const route = useRoute();
+const router = useRouter();
+const riskStore = useRiskStore();
 
 const menuItems = [
   { title: "看板", icon: Odometer, path: "/dashboard" },
@@ -31,6 +34,12 @@ const activeMenu = computed(() => {
   const match = menuItems.find((item) => path.startsWith(item.path));
   return match ? match.path : "/dashboard";
 });
+
+function handleMenuSelect(index: string) {
+  if (route.path !== index) {
+    router.push(index);
+  }
+}
 </script>
 
 <template>
@@ -44,13 +53,22 @@ const activeMenu = computed(() => {
       :collapse="collapsed"
       router
       class="sidebar-menu"
+      @select="handleMenuSelect"
       background-color="#304156"
       text-color="#bfcbd9"
       active-text-color="#409EFF"
     >
       <el-menu-item v-for="item in menuItems" :key="item.path" :index="item.path">
         <el-icon><component :is="item.icon" /></el-icon>
-        <template #title>{{ item.title }}</template>
+        <template #title>
+          <span>{{ item.title }}</span>
+          <el-badge
+            v-if="item.path === '/risk' && riskStore.unreadCount > 0"
+            :value="riskStore.unreadCount"
+            :max="99"
+            class="risk-badge"
+          />
+        </template>
       </el-menu-item>
     </el-menu>
   </el-aside>
@@ -64,7 +82,7 @@ const activeMenu = computed(() => {
 }
 
 .sidebar-logo {
-  height: 64px;
+  height: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -73,7 +91,7 @@ const activeMenu = computed(() => {
 
   h1 {
     margin: 0;
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 600;
     white-space: nowrap;
   }
@@ -81,5 +99,13 @@ const activeMenu = computed(() => {
 
 .sidebar-menu {
   border-right: none;
+}
+
+.risk-badge {
+  margin-left: 8px;
+
+  :deep(.el-badge__content) {
+    font-size: 10px;
+  }
 }
 </style>

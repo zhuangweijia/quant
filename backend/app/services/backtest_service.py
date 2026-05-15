@@ -1,19 +1,130 @@
 import asyncio
-import random
 import math
 from datetime import datetime, timezone
 from decimal import Decimal
-from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.market_data import BacktestResult
 from app.models.strategy import Strategy
-from app.services.market_service import MockDataProvider
+from app.services.market_service import get_provider
+from app.core.types import BaseStrategy, BarData, OrderSide, OrderType
 import structlog
 
 logger = structlog.get_logger()
+
+
+_SAFE_BUILTINS = {
+    "len": len, "range": range, "min": min, "max": max, "abs": abs,
+    "round": round, "sum": sum, "enumerate": enumerate, "zip": zip,
+    "map": map, "filter": filter, "sorted": sorted, "reversed": reversed,
+    "isinstance": isinstance, "float": float, "int": int, "str": str,
+    "list": list, "dict": dict, "tuple": tuple, "set": set, "bool": bool,
+    "print": print, "None": None, "True": True, "False": False,
+}
+
+
+def _load_strategy_class(code: str) -> type[BaseStrategy]:
+    restricted_globals = {
+        "__builtins__": _SAFE_BUILTINS,
+        "BaseStrategy": BaseStrategy,
+        "BarData": BarData,
+        "Decimal": Decimal,
+    }
+
+    exec_namespace = {}
+    exec(code, restricted_globals, exec_namespace)
+
+    for obj in exec_namespace.values():
+        if isinstance(obj, type) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy:
+            return obj
+    raise ValueError("未找到 BaseStrategy 子类")
+
+
+class BacktestContext:
+    def __init__(self, initial_cash: float, commission_rate: float, slippage: float, market: str):
+        self.cash = initial_cash
+        self.initial_cash = initial_cash
+        self.commission_rate = commission_rate
+        self.slippage = slippage
+        self.market = market
+        self.positions: dict[str, dict] = {}
+        self.orders: list[dict] = []
+        self.bars_cache: dict[str, list[BarData]] = {}
+        self.equity_curve: list[dict] = []
+        self.trades: list[dict] = []
+        self.current_price: float = 0
+
+    def send_order(self, symbol: str, side: OrderSide, order_type: OrderType,
+                   qty: float, price: float | None = None) -> str:
+        import uuid
+        order_id = str(uuid.uuid4())[:8]
+
+        if side == OrderSide.BUY:
+            fill_price = (price if price else self.current_price) * (1 + self.slippage)
+            commission = fill_price * qty * self.commission_rate
+            cost = fill_price * qty + commission
+            if cost > self.cash:
+                return ""
+            self.cash -= cost
+
+            if symbol in self.positions:
+                pos = self.positions[symbol]
+                new_qty = pos["qty"] + qty
+                pos["avg_price"] = (pos["avg_price"] * pos["qty"] + fill_price * qty) / new_qty
+                pos["qty"] = new_qty
+            else:
+                self.positions[symbol] = {"qty": qty, "avg_price": fill_price}
+
+            self.trades.append({
+                "entry_time": None,
+                "exit_time": None,
+                "symbol": symbol,
+                "side": "buy",
+                "entry_price": round(fill_price, 2),
+                "exit_price": None,
+                "qty": round(qty, 6),
+                "pnl": None,
+            })
+
+        elif side == OrderSide.SELL:
+            pos = self.positions.get(symbol)
+            if not pos or pos["qty"] < qty:
+                return ""
+
+            fill_price = (price if price else self.current_price) * (1 - self.slippage)
+            commission = fill_price * qty * self.commission_rate
+            proceeds = fill_price * qty - commission
+            self.cash += proceeds
+
+            pnl = proceeds - (pos["avg_price"] * qty)
+            pos["qty"] -= qty
+            if pos["qty"] <= 0:
+                del self.positions[symbol]
+
+            self.trades.append({
+                "entry_time": None,
+                "exit_time": None,
+                "symbol": symbol,
+                "side": "sell",
+                "entry_price": round(pos["avg_price"], 2),
+                "exit_price": round(fill_price, 2),
+                "qty": round(qty, 6),
+                "pnl": round(pnl, 2),
+            })
+
+        return order_id
+
+    def get_position(self, symbol: str) -> float:
+        pos = self.positions.get(symbol)
+        return pos["qty"] if pos else 0.0
+
+    def get_bars(self, symbol: str, length: int) -> list[BarData]:
+        return self.bars_cache.get(symbol, [])[-length:]
+
+    def log(self, message: str):
+        pass
 
 
 async def run_backtest(db: AsyncSession, user_id: str, payload: dict) -> BacktestResult:
@@ -38,7 +149,30 @@ async def run_backtest(db: AsyncSession, user_id: str, payload: dict) -> Backtes
 async def _execute_backtest(result_id: str, user_id: str, payload: dict):
     from app.database import AsyncSessionLocal
     try:
-        provider = MockDataProvider()
+        async with AsyncSessionLocal() as db:
+            strategy = await db.get(Strategy, payload["strategy_id"])
+            if not strategy:
+                async with AsyncSessionLocal() as db2:
+                    r = await db2.get(BacktestResult, result_id)
+                    if r:
+                        r.status = "failed"
+                        r.error_message = "策略不存在"
+                        await db2.commit()
+                return
+            strategy_code = strategy.code
+
+        try:
+            strategy_cls = _load_strategy_class(strategy_code)
+        except Exception as e:
+            async with AsyncSessionLocal() as db:
+                r = await db.get(BacktestResult, result_id)
+                if r:
+                    r.status = "failed"
+                    r.error_message = f"策略加载失败: {e}"
+                    await db.commit()
+            return
+
+        provider = get_provider(payload["market"])
         klines = await provider.get_klines(
             symbol=payload["symbol"],
             timeframe=payload["timeframe"],
@@ -48,10 +182,10 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
 
         if not klines:
             async with AsyncSessionLocal() as db:
-                result = await db.get(BacktestResult, result_id)
-                if result:
-                    result.status = "failed"
-                    result.error_message = "无法获取历史数据"
+                r = await db.get(BacktestResult, result_id)
+                if r:
+                    r.status = "failed"
+                    r.error_message = "无法获取历史数据"
                     await db.commit()
             return
 
@@ -59,83 +193,61 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
         commission_rate = float(payload.get("commission_rate") or 0.001)
         slippage = float(payload.get("slippage") or 0.001)
 
-        cash = initial
-        position_qty = 0.0
-        position_avg = 0.0
-        equity_curve = []
-        trades = []
-        total_bars = len(klines)
+        ctx = BacktestContext(initial, commission_rate, slippage, payload["market"])
+        strategy_instance = strategy_cls(payload.get("params") or {})
+        strategy_instance.set_context(ctx)
 
-        short_ma_period = 10
-        long_ma_period = 30
-        closes = []
+        try:
+            strategy_instance.on_init(ctx)
+        except Exception as e:
+            logger.warning("backtest.on_init_failed", error=str(e))
 
+        symbol = payload["symbol"]
         for i, bar in enumerate(klines):
             close = float(bar["close"])
-            high = float(bar["high"])
-            low = float(bar["low"])
-            closes.append(close)
+            bar_data = BarData(
+                symbol=symbol,
+                open=float(bar["open"]),
+                high=float(bar["high"]),
+                low=float(bar["low"]),
+                close=close,
+                volume=float(bar["volume"]),
+                timestamp=bar["timestamp"],
+            )
 
-            if len(closes) < long_ma_period:
-                equity = cash + position_qty * close
-                equity_curve.append({"timestamp": bar["timestamp"], "equity": round(equity, 2)})
-                continue
+            if symbol not in ctx.bars_cache:
+                ctx.bars_cache[symbol] = []
+            ctx.bars_cache[symbol].append(bar_data)
+            if len(ctx.bars_cache[symbol]) > 500:
+                ctx.bars_cache[symbol] = ctx.bars_cache[symbol][-500:]
 
-            short_ma = sum(closes[-short_ma_period:]) / short_ma_period
-            long_ma = sum(closes[-long_ma_period:]) / long_ma_period
+            try:
+                ctx.current_price = close
+                strategy_instance.on_bar(bar_data)
+            except Exception as e:
+                logger.warning("backtest.on_bar_error", error=str(e))
 
-            if short_ma > long_ma and position_qty == 0:
-                buy_price = close * (1 + slippage)
-                qty = (cash * 0.95) / buy_price
-                if qty > 0:
-                    commission = buy_price * qty * commission_rate
-                    cash -= (buy_price * qty + commission)
-                    position_qty = qty
-                    position_avg = buy_price
-                    trades.append({
-                        "entry_time": bar["timestamp"],
-                        "exit_time": None,
-                        "symbol": payload["symbol"],
-                        "side": "buy",
-                        "entry_price": round(buy_price, 2),
-                        "exit_price": None,
-                        "qty": round(qty, 6),
-                        "pnl": None,
-                    })
+            equity = ctx.cash
+            for sym, pos in ctx.positions.items():
+                equity += pos["qty"] * close
 
-            elif short_ma < long_ma and position_qty > 0:
-                sell_price = close * (1 - slippage)
-                commission = sell_price * position_qty * commission_rate
-                proceeds = sell_price * position_qty - commission
-                pnl = proceeds - (position_avg * position_qty)
-                cash += proceeds
+            ctx.equity_curve.append({
+                "timestamp": bar["timestamp"],
+                "equity": round(equity, 2),
+            })
 
-                if trades and trades[-1]["exit_time"] is None:
-                    trades[-1]["exit_time"] = bar["timestamp"]
-                    trades[-1]["exit_price"] = round(sell_price, 2)
-                    trades[-1]["pnl"] = round(pnl, 2)
+        for sym, pos in list(ctx.positions.items()):
+            if klines:
+                last_close = float(klines[-1]["close"])
+                ctx.cash += pos["qty"] * last_close
+                del ctx.positions[sym]
 
-                position_qty = 0
-                position_avg = 0
-
-            equity = cash + position_qty * close
-            equity_curve.append({"timestamp": bar["timestamp"], "equity": round(equity, 2)})
-
-        if position_qty > 0 and klines:
-            last_close = float(klines[-1]["close"])
-            cash += position_qty * last_close
-            if trades and trades[-1]["exit_time"] is None:
-                trades[-1]["exit_time"] = klines[-1]["timestamp"]
-                trades[-1]["exit_price"] = round(last_close, 2)
-                trades[-1]["pnl"] = round(last_close * position_qty - position_avg * position_qty, 2)
-            position_qty = 0
-
-        final_equity = cash
+        final_equity = ctx.cash
         total_return = (final_equity - initial) / initial
         trading_days = len(klines)
         annual_return = (1 + total_return) ** (252 / max(trading_days, 1)) - 1 if trading_days > 0 else 0
 
-        equity_values = [p["equity"] for p in equity_curve]
+        equity_values = [p["equity"] for p in ctx.equity_curve]
         returns = [(equity_values[i] - equity_values[i - 1]) / equity_values[i - 1]
                     for i in range(1, len(equity_values)) if equity_values[i - 1] > 0]
 
@@ -148,29 +260,27 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
         peak = initial
         max_dd = 0.0
         drawdown_curve = []
-        for eq in equity_values:
+        for i, eq in enumerate(equity_values):
             if eq > peak:
                 peak = eq
             dd = (peak - eq) / peak if peak > 0 else 0
             max_dd = max(max_dd, dd)
-            drawdown_curve.append({"timestamp": equity_curve[len(drawdown_curve)]["timestamp"], "drawdown": round(-dd * 100, 2)})
+            drawdown_curve.append({
+                "timestamp": ctx.equity_curve[i]["timestamp"],
+                "drawdown": round(-dd * 100, 2),
+            })
 
-        completed_trades = [t for t in trades if t["exit_time"] is not None]
+        completed_trades = [t for t in ctx.trades if t.get("exit_price") is not None]
         win_trades = [t for t in completed_trades if (t.get("pnl") or 0) > 0]
         win_rate = len(win_trades) / len(completed_trades) if completed_trades else 0
 
-        avg_win = sum(t["pnl"] for t in win_trades) / len(win_trades) if win_trades else 0
-        loss_trades = [t for t in completed_trades if (t.get("pnl") or 0) < 0]
-        avg_loss = abs(sum(t["pnl"] for t in loss_trades) / len(loss_trades)) if loss_trades else 0
-        profit_factor = (avg_win * len(win_trades)) / (avg_loss * len(loss_trades)) if loss_trades and avg_loss > 0 else 0
-
         total_profit = sum(t["pnl"] for t in win_trades) if win_trades else 0
-        total_loss = abs(sum(t["pnl"] for t in loss_trades)) if loss_trades else 0
+        total_loss = abs(sum(t["pnl"] for t in [t for t in completed_trades if (t.get("pnl") or 0) < 0]))
         profit_factor = total_profit / total_loss if total_loss > 0 else 0
 
         monthly_returns = {}
         for i in range(1, len(equity_values)):
-            ts = equity_curve[i]["timestamp"][:7]
+            ts = ctx.equity_curve[i]["timestamp"][:7]
             prev_eq = equity_values[i - 1]
             if prev_eq > 0:
                 mr = (equity_values[i] - prev_eq) / prev_eq
@@ -186,34 +296,39 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
 
         calmar = annual_return / max_dd if max_dd > 0 else 0
 
+        total_holding_bars = 0
+        for t in completed_trades:
+            total_holding_bars += 1
+        avg_holding = (total_holding_bars / len(completed_trades)) if completed_trades else 0
+
         async with AsyncSessionLocal() as db:
-            result = await db.get(BacktestResult, result_id)
-            if result:
-                result.status = "completed"
-                result.total_return = round(Decimal(str(total_return * 100)), 4)
-                result.annual_return = round(Decimal(str(annual_return * 100)), 4)
-                result.sharpe_ratio = round(Decimal(str(sharpe_ratio)), 4)
-                result.sortino_ratio = round(Decimal(str(sortino)), 4)
-                result.max_drawdown = round(Decimal(str(max_dd * 100)), 4)
-                result.calmar_ratio = round(Decimal(str(calmar)), 4)
-                result.win_rate = round(Decimal(str(win_rate * 100)), 4)
-                result.profit_factor = round(Decimal(str(profit_factor)), 4)
-                result.trade_count = len(completed_trades)
-                result.avg_holding_period = Decimal("0")
-                result.equity_curve = {"data": equity_curve}
-                result.drawdown_curve = {"data": drawdown_curve}
-                result.trades = {"data": trades}
-                result.monthly_returns = monthly_summary
+            r = await db.get(BacktestResult, result_id)
+            if r:
+                r.status = "completed"
+                r.total_return = round(Decimal(str(total_return * 100)), 4)
+                r.annual_return = round(Decimal(str(annual_return * 100)), 4)
+                r.sharpe_ratio = round(Decimal(str(sharpe_ratio)), 4)
+                r.sortino_ratio = round(Decimal(str(sortino)), 4)
+                r.max_drawdown = round(Decimal(str(max_dd * 100)), 4)
+                r.calmar_ratio = round(Decimal(str(calmar)), 4)
+                r.win_rate = round(Decimal(str(win_rate * 100)), 4)
+                r.profit_factor = round(Decimal(str(profit_factor)), 4)
+                r.trade_count = len(completed_trades)
+                r.avg_holding_period = round(Decimal(str(avg_holding)), 2)
+                r.equity_curve = {"data": ctx.equity_curve}
+                r.drawdown_curve = {"data": drawdown_curve}
+                r.trades = {"data": ctx.trades}
+                r.monthly_returns = monthly_summary
                 await db.commit()
 
     except Exception as e:
         logger.exception("backtest.execution_failed", result_id=result_id, error=str(e))
         try:
             async with AsyncSessionLocal() as db:
-                result = await db.get(BacktestResult, result_id)
-                if result:
-                    result.status = "failed"
-                    result.error_message = str(e)[:1000]
+                r = await db.get(BacktestResult, result_id)
+                if r:
+                    r.status = "failed"
+                    r.error_message = str(e)[:1000]
                     await db.commit()
         except Exception:
             pass

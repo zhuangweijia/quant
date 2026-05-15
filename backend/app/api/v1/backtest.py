@@ -39,10 +39,6 @@ async def api_list_results(
     page_size: int = Query(20, ge=1, le=100),
     strategy_id: str | None = Query(None),
 ):
-    query = select(func.count()).select_from(
-        __import__("app.models.market_data", fromlist=["BacktestResult"]).BacktestResult
-    )
-
     from app.models.market_data import BacktestResult
     count_query = select(func.count(BacktestResult.id)).where(BacktestResult.user_id == user.id)
     data_query = select(BacktestResult).where(BacktestResult.user_id == user.id)

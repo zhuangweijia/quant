@@ -2,8 +2,9 @@
 import { ref, reactive, onMounted } from "vue";
 import { settingsApi } from "@/api/settings";
 import { useAuthStore } from "@/stores/auth";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import type { BrokerConfig, ProfileInfo } from "@/types/settings";
+import { formatDate } from "@/utils/format";
 
 const authStore = useAuthStore();
 const activeTab = ref("broker");
@@ -13,9 +14,14 @@ const notifyLoading = ref(false);
 const paramLoading = ref(false);
 const profileLoading = ref(false);
 const saving = ref(false);
+const testingEmail = ref(false);
+const testingWebhook = ref(false);
 
 const brokers = ref<BrokerConfig[]>([]);
 const tradingMode = ref("paper");
+
+const hasEmailPassword = ref(false);
+const hasWebhookSecret = ref(false);
 
 const notifyForm = reactive({
   email_enabled: false,
@@ -74,6 +80,7 @@ const PARAM_LABELS: Record<string, string> = {
 };
 
 onMounted(async () => {
+  loadBrokerTab();
   profileLoading.value = true;
   try {
     const res: any = await settingsApi.getProfile();
@@ -108,6 +115,8 @@ async function loadNotifyTab() {
       Object.keys(notifyForm).forEach((key) => {
         if (key in data) (notifyForm as any)[key] = data[key];
       });
+      hasEmailPassword.value = !!data.has_email_password;
+      hasWebhookSecret.value = !!data.has_webhook_secret;
     }
   } finally {
     notifyLoading.value = false;
@@ -157,6 +166,18 @@ async function testConnection(broker: BrokerConfig) {
 }
 
 async function saveTradingMode() {
+  if (tradingMode.value === "live") {
+    try {
+      await ElMessageBox.confirm(
+        "切换到实盘模式将使用真实资金进行交易，请确保您已充分了解相关风险。确定要切换吗？",
+        "风险提示",
+        { confirmButtonText: "确认切换", cancelButtonText: "取消", type: "warning" },
+      );
+    } catch {
+      tradingMode.value = "paper";
+      return;
+    }
+  }
   saving.value = true;
   try {
     await settingsApi.updateTradingMode({ mode: tradingMode.value } as any);
@@ -177,6 +198,32 @@ async function saveNotifications() {
     ElMessage.error(e.message || "保存失败");
   } finally {
     saving.value = false;
+  }
+}
+
+async function testEmailNotify() {
+  testingEmail.value = true;
+  try {
+    const res: any = await settingsApi.testEmail();
+    const sent = res.data?.sent;
+    ElMessage.success(sent ? "测试邮件已发送" : "邮件发送失败，请检查配置");
+  } catch (e: any) {
+    ElMessage.error(e.message || "测试失败");
+  } finally {
+    testingEmail.value = false;
+  }
+}
+
+async function testWebhookNotify() {
+  testingWebhook.value = true;
+  try {
+    const res: any = await settingsApi.testWebhook();
+    const sent = res.data?.sent;
+    ElMessage.success(sent ? "测试 Webhook 已发送" : "Webhook 发送失败，请检查配置");
+  } catch (e: any) {
+    ElMessage.error(e.message || "测试失败");
+  } finally {
+    testingWebhook.value = false;
   }
 }
 
@@ -296,10 +343,18 @@ async function changePassword() {
                 <el-input v-model="notifyForm.email_sender" />
               </el-form-item>
               <el-form-item label="邮箱密码">
-                <el-input v-model="notifyForm.email_password" type="password" show-password />
+                <el-input
+                  v-model="notifyForm.email_password"
+                  type="password"
+                  show-password
+                  :placeholder="hasEmailPassword ? '已配置，留空则保持不变' : '请输入邮箱密码'"
+                />
               </el-form-item>
               <el-form-item label="收件人">
                 <el-input v-model="notifyForm.email_recipient" placeholder="多个邮箱用逗号分隔" />
+              </el-form-item>
+              <el-form-item label="邮件测试">
+                <el-button size="small" :loading="testingEmail" @click="testEmailNotify">发送测试邮件</el-button>
               </el-form-item>
 
               <el-divider />
@@ -311,7 +366,15 @@ async function changePassword() {
                 <el-input v-model="notifyForm.webhook_url" placeholder="https://..." />
               </el-form-item>
               <el-form-item label="Secret">
-                <el-input v-model="notifyForm.webhook_secret" type="password" show-password />
+                <el-input
+                  v-model="notifyForm.webhook_secret"
+                  type="password"
+                  show-password
+                  :placeholder="hasWebhookSecret ? '已配置，留空则保持不变' : '请输入 Webhook Secret'"
+                />
+              </el-form-item>
+              <el-form-item label="Webhook 测试">
+                <el-button size="small" :loading="testingWebhook" @click="testWebhookNotify">发送测试 Webhook</el-button>
               </el-form-item>
 
               <el-divider />
@@ -361,7 +424,7 @@ async function changePassword() {
                   {{ profile.is_active ? '正常' : '禁用' }}
                 </el-tag>
               </el-descriptions-item>
-              <el-descriptions-item label="注册时间">{{ new Date(profile.created_at).toLocaleString() }}</el-descriptions-item>
+              <el-descriptions-item label="注册时间">{{ formatDate(profile.created_at) }}</el-descriptions-item>
             </el-descriptions>
 
             <el-divider />

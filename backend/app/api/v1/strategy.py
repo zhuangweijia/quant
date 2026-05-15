@@ -164,6 +164,21 @@ async def start_strategy(
     if running_count and running_count >= 10:
         raise HTTPException(status_code=400, detail="同时运行策略数已达上限 (10)")
 
+    from app.services.strategy_engine import strategy_engine
+    try:
+        default_symbol = "BTCUSDT" if strategy.market == "crypto" else "AAPL" if strategy.market == "us_stock" else "000001"
+        await strategy_engine.start_strategy(
+            strategy_id=str(strategy.id),
+            user_id=user.id,
+            code=strategy.code,
+            params=strategy.params or {},
+            market=strategy.market,
+            timeframe="1d",
+            symbol=default_symbol,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"策略启动失败: {e}")
+
     strategy.status = "running"
     await db.flush()
     return ResponseBase()
@@ -180,6 +195,9 @@ async def stop_strategy(
         raise HTTPException(status_code=404, detail="策略不存在")
     if strategy.status != "running":
         raise HTTPException(status_code=400, detail="策略未在运行")
+
+    from app.services.strategy_engine import strategy_engine
+    await strategy_engine.stop_strategy(str(strategy.id))
 
     strategy.status = "stopped"
     await db.flush()

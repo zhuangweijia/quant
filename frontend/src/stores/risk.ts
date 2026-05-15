@@ -1,6 +1,7 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { riskApi } from "@/api/risk";
+import { wsClient } from "@/utils/websocket";
 import type { RiskRule, RiskRuleCreateRequest, RiskRuleUpdateRequest, Alert } from "@/types/risk";
 
 export const useRiskStore = defineStore("risk", () => {
@@ -8,6 +9,10 @@ export const useRiskStore = defineStore("risk", () => {
   const alerts = ref<Alert[]>([]);
   const alertTotal = ref(0);
   const unreadCount = ref(0);
+
+  wsClient.on("risk:alert", () => {
+    fetchUnreadCount();
+  });
 
   async function fetchRules() {
     const res: any = await riskApi.getRules();

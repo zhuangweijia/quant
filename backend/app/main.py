@@ -11,8 +11,20 @@ from app.core.events import event_bus
 from app.utils.logger import setup_logging
 from app.api.v1 import router as v1_router
 from app.core.exceptions import AppException
+from app.ws import ws_manager
 
 logger = structlog.get_logger()
+
+
+async def _forward_event_to_ws(topic: str, data: dict):
+    user_id = data.get("user_id")
+    if user_id:
+        from datetime import datetime, timezone
+        await ws_manager.send_to_user(user_id, {
+            "type": topic,
+            "data": data,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
 
 
 @asynccontextmanager
@@ -24,7 +36,26 @@ async def lifespan(app: FastAPI):
         await event_bus.connect()
     except Exception as e:
         logger.warning("event_bus.connect_failed", error=str(e))
+
+    for topic in [
+        event_bus.TOPIC_ORDER_UPDATE,
+        event_bus.TOPIC_TRADE_FILL,
+        event_bus.TOPIC_RISK_ALERT,
+        event_bus.TOPIC_STRATEGY_LOG,
+        event_bus.TOPIC_BACKTEST_PROGRESS,
+    ]:
+        try:
+            await event_bus.subscribe(
+                topic,
+                lambda data, _t=topic: _forward_event_to_ws(_t, data),
+            )
+        except Exception as e:
+            logger.warning("event_bus.subscribe_failed", topic=topic, error=str(e))
+
+    from app.services.strategy_engine import strategy_engine
+    strategy_engine.start()
     yield
+    strategy_engine.stop()
     await event_bus.disconnect()
     await close_db()
     logger.info("app.stopped")
@@ -50,6 +81,9 @@ app.add_middleware(
 )
 
 app.include_router(v1_router, prefix=settings.API_PREFIX)
+
+from app.ws.routes import router as ws_router
+app.include_router(ws_router)
 
 
 @app.exception_handler(AppException)

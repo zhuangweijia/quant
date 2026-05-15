@@ -214,13 +214,20 @@ async def _update_position(db: AsyncSession, order: Order) -> None:
             )
             db.add(position)
 
+        from app.services.account_service import get_or_create_account
+        account = await get_or_create_account(db, order.user_id)
+        cost = filled_price * filled_qty
+        commission = order.commission or Decimal("0")
+        account.cash -= (cost + commission)
+
     elif order.side == "sell":
-        result = await db.execute(
-            select(Position).where(
-                Position.user_id == order.user_id,
-                Position.symbol == order.symbol,
-            )
+        query = select(Position).where(
+            Position.user_id == order.user_id,
+            Position.symbol == order.symbol,
         )
+        if order.strategy_id:
+            query = query.where(Position.strategy_id == order.strategy_id)
+        result = await db.execute(query)
         position = result.scalar_one_or_none()
         if position:
             position.qty -= filled_qty
@@ -228,6 +235,12 @@ async def _update_position(db: AsyncSession, order: Order) -> None:
                 position.frozen_qty = max(Decimal("0"), position.frozen_qty - filled_qty)
             if position.qty <= 0:
                 await db.delete(position)
+
+        from app.services.account_service import get_or_create_account
+        account = await get_or_create_account(db, order.user_id)
+        proceeds = filled_price * filled_qty
+        commission = order.commission or Decimal("0")
+        account.cash += (proceeds - commission)
 
     try:
         await event_bus.publish("trade:position", {

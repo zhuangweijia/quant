@@ -1,11 +1,12 @@
 from fastapi import APIRouter, Query
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.api.deps import CurrentUser, DBSession
 from app.schemas.common import ResponseBase
 from app.schemas.dashboard import DashboardOverview, EquityCurvePoint, StrategyRankItem
 from app.services.account_service import get_account_info
 from app.models.market_data import BacktestResult
+from app.models.equity_snapshot import EquitySnapshot
 
 router = APIRouter()
 
@@ -22,18 +23,41 @@ async def get_equity_curve(
     db: DBSession,
     range: str = Query("1M", pattern=r"^(1D|1W|1M|3M|1Y|ALL)$"),
 ):
-    from app.services.market_service import MockDataProvider
-    provider = MockDataProvider()
-    klines = await provider.get_klines("BTCUSDT", "1d", limit=90)
+    from datetime import timedelta, datetime, timezone
+    range_days = {"1D": 1, "1W": 7, "1M": 30, "3M": 90, "1Y": 365, "ALL": 9999}
+    days = range_days.get(range, 30)
+
+    query = select(EquitySnapshot).where(
+        EquitySnapshot.user_id == user.id,
+    ).order_by(EquitySnapshot.date.asc())
+
+    if days < 9999:
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        query = query.where(EquitySnapshot.date >= cutoff)
+
+    result = await db.execute(query)
+    snapshots = result.scalars().all()
+
+    if not snapshots:
+        from app.services.account_service import get_or_create_account
+        account = await get_or_create_account(db, user.id)
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        return ResponseBase(data=[EquityCurvePoint(
+            date=today,
+            equity=float(account.cash),
+            benchmark=float(account.initial_capital),
+        )])
 
     points = []
-    for i, k in enumerate(klines):
-        equity = 1000000 * (1 + i * 0.001)
+    initial = float(snapshots[0].total_equity) if snapshots else 1000000
+    for snap in snapshots:
         points.append(EquityCurvePoint(
-            date=k["timestamp"][:10],
-            equity=round(equity, 2),
-            benchmark=1000000,
+            date=snap.date,
+            equity=float(snap.total_equity),
+            benchmark=initial,
         ))
+
     return ResponseBase(data=points)
 
 

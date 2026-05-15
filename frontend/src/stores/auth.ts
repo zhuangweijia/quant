@@ -34,6 +34,11 @@ export const useAuthStore = defineStore("auth", () => {
     storage.clearAuth();
   }
 
+  async function register(data: { username: string; password: string; confirm_password: string }) {
+    const res: any = await authApi.register(data);
+    return res;
+  }
+
   return {
     accessToken,
     refreshToken,
@@ -44,5 +49,6 @@ export const useAuthStore = defineStore("auth", () => {
     login,
     fetchUser,
     logout,
+    register,
   };
 });

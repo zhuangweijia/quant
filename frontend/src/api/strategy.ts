@@ -29,3 +29,8 @@ export const strategyApi = {
   stop: (id: string) =>
     client.post<ResponseBase<null>>(`/api/v1/strategies/${id}/stop`),
 };
+
+export const strategyLogApi = {
+  list: (strategyId: string, params?: Record<string, any>) =>
+    client.get<ResponseBase<PageResponse<any>>>(`/api/v1/strategies/${strategyId}/logs`, { params }),
+};

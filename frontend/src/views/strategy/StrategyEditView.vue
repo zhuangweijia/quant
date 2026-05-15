@@ -10,6 +10,8 @@ const router = useRouter();
 const isEdit = computed(() => !!route.params.id);
 const loading = ref(false);
 
+const codeEditor = ref<HTMLTextAreaElement>();
+
 const form = ref({
   name: "",
   description: "",
@@ -29,6 +31,20 @@ class MyStrategy(BaseStrategy):
   params: '{"short_period": 5, "long_period": 20}',
   market: "crypto",
 });
+
+const codeLines = computed(() => form.value.code.split("\n").length);
+
+function handleCodeScroll(e: Event) {
+  const ta = e.target as HTMLTextAreaElement;
+  const gutter = ta.parentElement?.querySelector(".code-gutter") as HTMLElement;
+  if (gutter) gutter.scrollTop = ta.scrollTop;
+}
+
+function syncScroll() {
+  const ta = codeEditor.value;
+  const gutter = ta?.parentElement?.querySelector(".code-gutter") as HTMLElement;
+  if (ta && gutter) gutter.scrollTop = ta.scrollTop;
+}
 
 onMounted(async () => {
   if (isEdit.value) {
@@ -55,6 +71,10 @@ onMounted(async () => {
 async function handleSave() {
   if (!form.value.name) {
     ElMessage.warning("请输入策略名称");
+    return;
+  }
+  if (!form.value.code || !form.value.code.trim()) {
+    ElMessage.warning("请输入策略代码");
     return;
   }
   loading.value = true;
@@ -99,12 +119,12 @@ async function handleSave() {
         <span>{{ isEdit ? "编辑策略" : "创建策略" }}</span>
       </template>
 
-      <el-form :model="form" label-width="100px" v-loading="loading" style="max-width: 900px">
+      <el-form :model="form" label-width="100px" v-loading="loading" style="max-width: 960px">
         <el-form-item label="策略名称">
           <el-input v-model="form.name" placeholder="输入策略名称" />
         </el-form-item>
         <el-form-item label="目标市场">
-          <el-select v-model="form.market">
+          <el-select v-model="form.market" :disabled="isEdit">
             <el-option
               v-for="(label, value) in MARKET_LABELS"
               :key="value"
@@ -117,13 +137,19 @@ async function handleSave() {
           <el-input v-model="form.description" type="textarea" :rows="2" placeholder="策略描述（可选）" />
         </el-form-item>
         <el-form-item label="策略代码">
-          <el-input
-            v-model="form.code"
-            type="textarea"
-            :rows="20"
-            font="monospace"
-            style="font-family: 'Courier New', monospace"
-          />
+          <div class="code-editor">
+            <div class="code-gutter" aria-hidden="true">
+              <div v-for="n in codeLines" :key="n" class="code-line-number">{{ n }}</div>
+            </div>
+            <textarea
+              ref="codeEditor"
+              v-model="form.code"
+              class="code-textarea"
+              spellcheck="false"
+              @scroll="handleCodeScroll"
+              @input="syncScroll"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="策略参数">
           <el-input
@@ -144,3 +170,53 @@ async function handleSave() {
     </el-card>
   </div>
 </template>
+
+<style scoped lang="scss">
+.code-editor {
+  display: flex;
+  width: 100%;
+  border: 1px solid var(--qp-border-color, #dcdfe6);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #fafafa;
+  font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.code-gutter {
+  flex-shrink: 0;
+  width: 48px;
+  padding: 10px 0;
+  background: #f0f0f0;
+  border-right: 1px solid var(--qp-border-color, #dcdfe6);
+  overflow: hidden;
+  user-select: none;
+  text-align: right;
+}
+
+.code-line-number {
+  padding: 0 8px;
+  color: #999;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.code-textarea {
+  flex: 1;
+  min-height: 480px;
+  padding: 10px 12px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  tab-size: 4;
+  color: var(--qp-text-primary, #303133);
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+}
+</style>
