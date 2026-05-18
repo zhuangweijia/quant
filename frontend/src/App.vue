@@ -1,28 +1,35 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from "vue";
-import { useAuthStore } from "@/stores/auth";
-import { wsClient } from "@/utils/websocket";
+import { onMounted, onUnmounted } from 'vue'
+import { Toaster } from '@/components/ui/sonner'
+import { useThemeStore } from '@/stores/theme'
+import { useAuthStore } from '@/stores/auth'
+import { wsClient } from '@/utils/websocket'
 
-const authStore = useAuthStore();
+const themeStore = useThemeStore()
+const authStore = useAuthStore()
 
 onMounted(async () => {
+  themeStore.initTheme()
   if (authStore.isLoggedIn && !authStore.user) {
     try {
-      await authStore.fetchUser();
-      wsClient.connect();
+      await authStore.fetchUser()
+      wsClient.connect()
     } catch {
-      authStore.logout();
+      authStore.logout()
     }
   } else if (authStore.isLoggedIn) {
-    wsClient.connect();
+    wsClient.connect()
   }
-});
+})
 
 onUnmounted(() => {
-  wsClient.disconnect();
-});
+  wsClient.disconnect()
+})
 </script>
 
 <template>
-  <router-view />
+  <Toaster />
+  <router-view v-slot="{ Component, route }">
+    <component :is="Component" :key="route.path" />
+  </router-view>
 </template>

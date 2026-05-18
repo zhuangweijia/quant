@@ -1,18 +1,27 @@
+<script setup lang="ts">
+import { useRouter } from 'vue-router'
+import Button from '@/components/ui/button/Button.vue'
+import { FileQuestion } from 'lucide-vue-next'
+
+const router = useRouter()
+</script>
+
 <template>
-  <div class="not-found">
-    <el-result icon="warning" title="404" sub-title="页面不存在">
-      <template #extra>
-        <el-button type="primary" @click="$router.push('/')">返回首页</el-button>
-      </template>
-    </el-result>
+  <div class="min-h-screen flex items-center justify-center p-6 bg-background">
+    <div class="text-center space-y-6 max-w-md">
+      <div class="flex justify-center">
+        <div class="rounded-full bg-muted p-6">
+          <FileQuestion class="size-12 text-muted-foreground" />
+        </div>
+      </div>
+      <div class="space-y-2">
+        <h1 class="text-4xl font-bold tracking-tight">404</h1>
+        <p class="text-muted-foreground">页面不存在或已被移除。</p>
+      </div>
+      <div class="flex gap-3 justify-center">
+        <Button @click="router.push('/dashboard')">返回首页</Button>
+        <Button variant="outline" @click="router.back()">返回上页</Button>
+      </div>
+    </div>
   </div>
 </template>
-
-<style scoped>
-.not-found {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-}
-</style>

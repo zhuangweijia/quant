@@ -1,499 +1,355 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
-import { settingsApi } from "@/api/settings";
-import { useAuthStore } from "@/stores/auth";
-import { ElMessage, ElMessageBox } from "element-plus";
-import type { BrokerConfig, ProfileInfo } from "@/types/settings";
-import { formatDate } from "@/utils/format";
+import { ref, onMounted } from 'vue'
+import { toast } from 'vue-sonner'
+import { useTheme } from '@/composables/useTheme'
+import { settingsApi } from '@/api/settings'
+import { BasicPage } from '@/components/global-layout'
+import Button from '@/components/ui/button/Button.vue'
+import Label from '@/components/ui/label/Label.vue'
+import Input from '@/components/ui/input/Input.vue'
+import UiSwitch from '@/components/ui/switch/Switch.vue'
+import UiSkeleton from '@/components/ui/skeleton/Skeleton.vue'
+import {
+  Card as UiCard,
+  CardHeader as UiCardHeader,
+  CardContent as UiCardContent,
+  CardTitle as UiCardTitle,
+  CardDescription as UiCardDescription,
+} from '@/components/ui/card'
+import {
+  Select as UiSelect,
+  SelectContent as UiSelectContent,
+  SelectItem as UiSelectItem,
+  SelectTrigger as UiSelectTrigger,
+  SelectValue as UiSelectValue,
+} from '@/components/ui/select'
+import {
+  Tabs as UiTabs,
+  TabsContent as UiTabsContent,
+  TabsList as UiTabsList,
+  TabsTrigger as UiTabsTrigger,
+} from '@/components/ui/tabs'
+import {
+  Separator as UiSeparator,
+} from '@/components/ui/separator'
+import {
+  AlertDialog as UiAlertDialog,
+  AlertDialogAction as UiAlertDialogAction,
+  AlertDialogCancel as UiAlertDialogCancel,
+  AlertDialogContent as UiAlertDialogContent,
+  AlertDialogDescription as UiAlertDialogDescription,
+  AlertDialogFooter as UiAlertDialogFooter,
+  AlertDialogHeader as UiAlertDialogHeader,
+  AlertDialogTitle as UiAlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 
-const authStore = useAuthStore();
-const activeTab = ref("broker");
+const { isDark, toggleTheme, theme, setTheme } = useTheme()
+const loading = ref(false)
+const activeTab = ref('profile')
 
-const brokerLoading = ref(false);
-const notifyLoading = ref(false);
-const paramLoading = ref(false);
-const profileLoading = ref(false);
-const saving = ref(false);
-const testingEmail = ref(false);
-const testingWebhook = ref(false);
+const profile = ref({ username: '', email: '' })
+const passwordForm = ref({ old_password: '', new_password: '', confirm_password: '' })
+const passwordDialog = ref(false)
 
-const brokers = ref<BrokerConfig[]>([]);
-const tradingMode = ref("paper");
+const brokerName = ref('default')
+const broker = ref({ api_key: '', api_secret: '', testnet: false })
+const tradingMode = ref('paper')
 
-const hasEmailPassword = ref(false);
-const hasWebhookSecret = ref(false);
+const notifications = ref({ email_enabled: false, webhook_enabled: false, email_address: '', webhook_url: '' })
 
-const notifyForm = reactive({
-  email_enabled: false,
-  email_smtp_host: "",
-  email_smtp_port: 465,
-  email_sender: "",
-  email_password: "",
-  email_use_ssl: true,
-  email_recipient: "",
-  webhook_enabled: false,
-  webhook_url: "",
-  webhook_secret: "",
-  notify_levels: ["warning", "error"] as string[],
-});
+const themeColors = [
+  { value: 'zinc', label: 'Zinc' },
+  { value: 'red', label: 'Red' },
+  { value: 'rose', label: 'Rose' },
+  { value: 'orange', label: 'Orange' },
+  { value: 'green', label: 'Green' },
+  { value: 'blue', label: 'Blue' },
+  { value: 'yellow', label: 'Yellow' },
+  { value: 'violet', label: 'Violet' },
+]
 
-const systemParams = ref<Record<string, string>>({});
-const profile = ref<ProfileInfo | null>(null);
-
-const passwordForm = reactive({
-  old_password: "",
-  new_password: "",
-  confirm_password: "",
-});
-
-const PARAM_GROUPS = [
-  {
-    label: "策略限制",
-    keys: ["max_strategies_per_user", "max_running_strategies", "max_concurrent_backtests"],
-  },
-  {
-    label: "超时设置",
-    keys: ["backtest_timeout", "order_timeout"],
-  },
-  {
-    label: "资金与佣金",
-    keys: ["paper_initial_capital", "default_commission_a_stock", "default_commission_us_stock", "default_commission_crypto"],
-  },
-  {
-    label: "数据保留",
-    keys: ["data_retention_days", "alert_retention_days"],
-  },
-];
-
-const PARAM_LABELS: Record<string, string> = {
-  max_strategies_per_user: "每用户最大策略数",
-  max_running_strategies: "最大运行策略数",
-  max_concurrent_backtests: "最大并发回测数",
-  backtest_timeout: "回测超时(秒)",
-  order_timeout: "下单超时(秒)",
-  paper_initial_capital: "模拟盘初始资金",
-  default_commission_a_stock: "A股默认佣金",
-  default_commission_us_stock: "美股默认佣金",
-  default_commission_crypto: "加密货币默认佣金",
-  data_retention_days: "数据保留天数",
-  alert_retention_days: "告警保留天数",
-};
-
-onMounted(async () => {
-  loadBrokerTab();
-  profileLoading.value = true;
+async function loadSettings() {
+  loading.value = true
   try {
-    const res: any = await settingsApi.getProfile();
-    profile.value = res.data;
-  } catch {
-    // ignore
-  } finally {
-    profileLoading.value = false;
-  }
-});
-
-async function loadBrokerTab() {
-  brokerLoading.value = true;
-  try {
-    const [brokerRes, modeRes] = await Promise.allSettled([
+    const [profileRes, brokerRes, modeRes, notifRes] = await Promise.allSettled([
+      settingsApi.getProfile(),
       settingsApi.getBrokers(),
       settingsApi.getTradingMode(),
-    ]);
-    if (brokerRes.status === "fulfilled") brokers.value = (brokerRes.value as any).data || [];
-    if (modeRes.status === "fulfilled") tradingMode.value = (modeRes.value as any).data?.mode || "paper";
-  } finally {
-    brokerLoading.value = false;
-  }
-}
-
-async function loadNotifyTab() {
-  notifyLoading.value = true;
-  try {
-    const res: any = await settingsApi.getNotifications();
-    const data = res.data;
-    if (data) {
-      Object.keys(notifyForm).forEach((key) => {
-        if (key in data) (notifyForm as any)[key] = data[key];
-      });
-      hasEmailPassword.value = !!data.has_email_password;
-      hasWebhookSecret.value = !!data.has_webhook_secret;
+      settingsApi.getNotifications(),
+    ])
+    if (profileRes.status === 'fulfilled') {
+      const d = (profileRes.value as any).data
+      profile.value = { username: d?.username || '', email: d?.email || '' }
     }
-  } finally {
-    notifyLoading.value = false;
-  }
+    if (brokerRes.status === 'fulfilled') {
+      const d = (brokerRes.value as any).data
+      if (Array.isArray(d) && d.length) {
+        brokerName.value = d[0].broker_name || 'default'
+        broker.value = { api_key: d[0].api_key || '', api_secret: d[0].api_secret || '', testnet: d[0].testnet || false }
+      }
+    }
+    if (modeRes.status === 'fulfilled') tradingMode.value = (modeRes.value as any).data?.mode || 'paper'
+    if (notifRes.status === 'fulfilled') {
+      const d = (notifRes.value as any).data
+      notifications.value = {
+        email_enabled: d?.email_enabled || false,
+        webhook_enabled: d?.webhook_enabled || false,
+        email_address: d?.email_address || '',
+        webhook_url: d?.webhook_url || '',
+      }
+    }
+  } finally { loading.value = false }
 }
 
-async function loadParamsTab() {
-  paramLoading.value = true;
+async function saveBroker() {
   try {
-    const res: any = await settingsApi.getParams();
-    systemParams.value = res.data || {};
-  } finally {
-    paramLoading.value = false;
-  }
+    await settingsApi.updateBroker(brokerName.value, broker.value)
+    toast.success('券商配置已保存')
+  } catch (e: any) { toast.error(e.message || '保存失败') }
 }
 
-function onTabChange(tab: string | number) {
-  if (tab === "broker" && !brokers.value.length) loadBrokerTab();
-  if (tab === "notify") loadNotifyTab();
-  if (tab === "params" && !Object.keys(systemParams.value).length) loadParamsTab();
-}
-
-async function saveBroker(broker: BrokerConfig) {
-  saving.value = true;
+async function testBrokerConnection() {
   try {
-    await settingsApi.updateBroker(broker.broker_name, {
-      api_key: broker.api_key,
-      api_secret: "",
-      params: broker.params,
-    });
-    ElMessage.success(`${broker.broker_name} 配置已保存`);
-  } catch (e: any) {
-    ElMessage.error(e.message || "保存失败");
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function testConnection(broker: BrokerConfig) {
-  try {
-    const res: any = await settingsApi.testBroker(broker.broker_name);
-    const connected = res.data?.connected;
-    ElMessage.success(connected ? `${broker.broker_name} 连接成功` : `${broker.broker_name} 连接失败`);
-  } catch (e: any) {
-    ElMessage.error(e.message || "测试失败");
-  }
+    await settingsApi.testBroker(brokerName.value)
+    toast.success('连接测试成功')
+  } catch (e: any) { toast.error(e.message || '连接测试失败') }
 }
 
 async function saveTradingMode() {
-  if (tradingMode.value === "live") {
-    try {
-      await ElMessageBox.confirm(
-        "切换到实盘模式将使用真实资金进行交易，请确保您已充分了解相关风险。确定要切换吗？",
-        "风险提示",
-        { confirmButtonText: "确认切换", cancelButtonText: "取消", type: "warning" },
-      );
-    } catch {
-      tradingMode.value = "paper";
-      return;
-    }
-  }
-  saving.value = true;
   try {
-    await settingsApi.updateTradingMode({ mode: tradingMode.value } as any);
-    ElMessage.success("交易模式已更新");
-  } catch (e: any) {
-    ElMessage.error(e.message || "更新失败");
-  } finally {
-    saving.value = false;
-  }
+    await settingsApi.updateTradingMode({ mode: tradingMode.value })
+    toast.success('交易模式已更新')
+  } catch (e: any) { toast.error(e.message || '保存失败') }
 }
 
 async function saveNotifications() {
-  saving.value = true;
   try {
-    await settingsApi.updateNotifications(notifyForm);
-    ElMessage.success("通知配置已保存");
-  } catch (e: any) {
-    ElMessage.error(e.message || "保存失败");
-  } finally {
-    saving.value = false;
-  }
+    await settingsApi.updateNotifications(notifications.value as any)
+    toast.success('通知设置已保存')
+  } catch (e: any) { toast.error(e.message || '保存失败') }
 }
 
-async function testEmailNotify() {
-  testingEmail.value = true;
+async function testEmail() {
   try {
-    const res: any = await settingsApi.testEmail();
-    const sent = res.data?.sent;
-    ElMessage.success(sent ? "测试邮件已发送" : "邮件发送失败，请检查配置");
-  } catch (e: any) {
-    ElMessage.error(e.message || "测试失败");
-  } finally {
-    testingEmail.value = false;
-  }
+    await settingsApi.testEmail()
+    toast.success('测试邮件已发送')
+  } catch (e: any) { toast.error(e.message || '发送失败') }
 }
 
-async function testWebhookNotify() {
-  testingWebhook.value = true;
-  try {
-    const res: any = await settingsApi.testWebhook();
-    const sent = res.data?.sent;
-    ElMessage.success(sent ? "测试 Webhook 已发送" : "Webhook 发送失败，请检查配置");
-  } catch (e: any) {
-    ElMessage.error(e.message || "测试失败");
-  } finally {
-    testingWebhook.value = false;
+async function handleChangePassword() {
+  if (!passwordForm.value.old_password || !passwordForm.value.new_password) {
+    toast.error('请填写完整密码信息')
+    return
   }
+  if (passwordForm.value.new_password !== passwordForm.value.confirm_password) {
+    toast.error('两次密码不一致')
+    return
+  }
+  try {
+    await settingsApi.changePassword(passwordForm.value as any)
+    toast.success('密码已修改')
+    passwordDialog.value = false
+    passwordForm.value = { old_password: '', new_password: '', confirm_password: '' }
+  } catch (e: any) { toast.error(e.message || '修改失败') }
 }
 
-async function saveParams() {
-  saving.value = true;
-  try {
-    await settingsApi.updateParams(systemParams.value);
-    ElMessage.success("参数已保存");
-  } catch (e: any) {
-    ElMessage.error(e.message || "保存失败");
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function resetParams() {
-  try {
-    await settingsApi.resetParams();
-    await loadParamsTab();
-    ElMessage.success("参数已重置");
-  } catch (e: any) {
-    ElMessage.error(e.message || "重置失败");
-  }
-}
-
-async function changePassword() {
-  if (!passwordForm.old_password || !passwordForm.new_password) {
-    ElMessage.warning("请填写完整");
-    return;
-  }
-  if (passwordForm.new_password !== passwordForm.confirm_password) {
-    ElMessage.warning("两次密码不一致");
-    return;
-  }
-  saving.value = true;
-  try {
-    await settingsApi.changePassword(passwordForm);
-    ElMessage.success("密码已修改");
-    passwordForm.old_password = "";
-    passwordForm.new_password = "";
-    passwordForm.confirm_password = "";
-  } catch (e: any) {
-    ElMessage.error(e.message || "修改失败");
-  } finally {
-    saving.value = false;
-  }
-}
+onMounted(loadSettings)
 </script>
 
 <template>
-  <div class="settings-view">
-    <el-card shadow="hover">
-      <el-tabs v-model="activeTab" @tab-change="onTabChange">
-        <el-tab-pane label="券商配置" name="broker">
-          <div v-loading="brokerLoading">
-            <el-card v-for="broker in brokers" :key="broker.broker_name" shadow="hover" class="broker-card">
-              <el-form label-width="100px" size="small">
-                <el-row :gutter="16">
-                  <el-col :span="8">
-                    <el-form-item label="券商">
-                      <el-input :model-value="broker.broker_name" disabled />
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="8">
-                    <el-form-item label="市场">
-                      <el-tag>{{ broker.market }}</el-tag>
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="8">
-                    <el-form-item label="状态">
-                      <el-tag :type="broker.connected ? 'success' : 'info'">
-                        {{ broker.connected ? '已连接' : '未连接' }}
-                      </el-tag>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-                <el-row :gutter="16">
-                  <el-col :span="12">
-                    <el-form-item label="API Key">
-                      <el-input v-model="broker.api_key" placeholder="API Key" show-password />
-                    </el-form-item>
-                  </el-col>
-                  <el-col :span="12">
-                    <el-form-item label="操作">
-                      <el-button size="small" @click="testConnection(broker)">测试连接</el-button>
-                      <el-button size="small" type="primary" @click="saveBroker(broker)">保存</el-button>
-                    </el-form-item>
-                  </el-col>
-                </el-row>
-              </el-form>
-            </el-card>
+  <BasicPage title="设置" description="管理账户、券商、通知和外观配置">
+    <UiTabs v-model="activeTab">
+      <UiTabsList>
+        <UiTabsTrigger value="profile">账户</UiTabsTrigger>
+        <UiTabsTrigger value="broker">券商</UiTabsTrigger>
+        <UiTabsTrigger value="notifications">通知</UiTabsTrigger>
+        <UiTabsTrigger value="appearance">外观</UiTabsTrigger>
+      </UiTabsList>
 
-            <el-divider />
+      <UiTabsContent value="profile" class="mt-6 space-y-6">
+        <UiCard>
+          <UiCardHeader>
+            <UiCardTitle>个人资料</UiCardTitle>
+            <UiCardDescription>管理你的账户信息</UiCardDescription>
+          </UiCardHeader>
+          <UiCardContent v-if="loading">
+            <div class="space-y-4">
+              <UiSkeleton class="h-10 w-full" />
+              <UiSkeleton class="h-10 w-full" />
+            </div>
+          </UiCardContent>
+          <UiCardContent v-else class="space-y-4">
+            <div class="space-y-2">
+              <Label>用户名</Label>
+              <Input v-model="profile.username" disabled />
+            </div>
+            <div class="space-y-2">
+              <Label>邮箱</Label>
+              <Input v-model="profile.email" placeholder="your@email.com" />
+            </div>
+            <UiSeparator />
+            <Button variant="outline" @click="passwordDialog = true">修改密码</Button>
+          </UiCardContent>
+        </UiCard>
+      </UiTabsContent>
 
-            <h4 style="margin-bottom: 12px">交易模式</h4>
-            <el-radio-group v-model="tradingMode" @change="saveTradingMode">
-              <el-radio value="paper">模拟盘</el-radio>
-              <el-radio value="live">实盘</el-radio>
-            </el-radio-group>
-          </div>
-        </el-tab-pane>
+      <UiTabsContent value="broker" class="mt-6 space-y-6">
+        <UiCard>
+          <UiCardHeader>
+            <UiCardTitle>券商配置</UiCardTitle>
+            <UiCardDescription>配置交易所 API 连接</UiCardDescription>
+          </UiCardHeader>
+          <UiCardContent class="space-y-4">
+            <div class="space-y-2">
+              <Label>API Key</Label>
+              <Input v-model="broker.api_key" type="password" placeholder="输入 API Key" />
+            </div>
+            <div class="space-y-2">
+              <Label>API Secret</Label>
+              <Input v-model="broker.api_secret" type="password" placeholder="输入 API Secret" />
+            </div>
+            <div class="flex items-center justify-between">
+              <Label>使用测试网</Label>
+              <UiSwitch v-model:checked="broker.testnet" />
+            </div>
+            <div class="flex gap-3">
+              <Button @click="saveBroker">保存配置</Button>
+              <Button variant="outline" @click="testBrokerConnection">测试连接</Button>
+            </div>
+          </UiCardContent>
+        </UiCard>
 
-        <el-tab-pane label="通知配置" name="notify">
-          <div v-loading="notifyLoading">
-            <el-form label-width="100px" style="max-width: 600px">
-              <h4 class="section-title">邮件通知</h4>
-              <el-form-item label="启用">
-                <el-switch v-model="notifyForm.email_enabled" />
-              </el-form-item>
-              <el-form-item label="SMTP 主机">
-                <el-input v-model="notifyForm.email_smtp_host" placeholder="smtp.example.com" />
-              </el-form-item>
-              <el-form-item label="SMTP 端口">
-                <el-input-number v-model="notifyForm.email_smtp_port" :min="1" :max="65535" />
-              </el-form-item>
-              <el-form-item label="发件人">
-                <el-input v-model="notifyForm.email_sender" />
-              </el-form-item>
-              <el-form-item label="邮箱密码">
-                <el-input
-                  v-model="notifyForm.email_password"
-                  type="password"
-                  show-password
-                  :placeholder="hasEmailPassword ? '已配置，留空则保持不变' : '请输入邮箱密码'"
-                />
-              </el-form-item>
-              <el-form-item label="收件人">
-                <el-input v-model="notifyForm.email_recipient" placeholder="多个邮箱用逗号分隔" />
-              </el-form-item>
-              <el-form-item label="邮件测试">
-                <el-button size="small" :loading="testingEmail" @click="testEmailNotify">发送测试邮件</el-button>
-              </el-form-item>
+        <UiCard>
+          <UiCardHeader>
+            <UiCardTitle>交易模式</UiCardTitle>
+          </UiCardHeader>
+          <UiCardContent class="space-y-4">
+            <div class="space-y-2">
+              <Label>当前模式</Label>
+              <UiSelect v-model="tradingMode">
+                <UiSelectTrigger class="w-48"><UiSelectValue /></UiSelectTrigger>
+                <UiSelectContent>
+                  <UiSelectItem value="paper">模拟盘</UiSelectItem>
+                  <UiSelectItem value="live">实盘</UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+            </div>
+            <Button @click="saveTradingMode">保存</Button>
+          </UiCardContent>
+        </UiCard>
+      </UiTabsContent>
 
-              <el-divider />
-              <h4 class="section-title">Webhook 通知</h4>
-              <el-form-item label="启用">
-                <el-switch v-model="notifyForm.webhook_enabled" />
-              </el-form-item>
-              <el-form-item label="URL">
-                <el-input v-model="notifyForm.webhook_url" placeholder="https://..." />
-              </el-form-item>
-              <el-form-item label="Secret">
-                <el-input
-                  v-model="notifyForm.webhook_secret"
-                  type="password"
-                  show-password
-                  :placeholder="hasWebhookSecret ? '已配置，留空则保持不变' : '请输入 Webhook Secret'"
-                />
-              </el-form-item>
-              <el-form-item label="Webhook 测试">
-                <el-button size="small" :loading="testingWebhook" @click="testWebhookNotify">发送测试 Webhook</el-button>
-              </el-form-item>
-
-              <el-divider />
-              <h4 class="section-title">通知等级</h4>
-              <el-form-item label="通知等级">
-                <el-checkbox-group v-model="notifyForm.notify_levels">
-                  <el-checkbox value="info">信息</el-checkbox>
-                  <el-checkbox value="warning">警告</el-checkbox>
-                  <el-checkbox value="error">错误</el-checkbox>
-                </el-checkbox-group>
-              </el-form-item>
-
-              <el-form-item>
-                <el-button type="primary" :loading="saving" @click="saveNotifications">保存通知配置</el-button>
-              </el-form-item>
-            </el-form>
-          </div>
-        </el-tab-pane>
-
-        <el-tab-pane label="系统参数" name="params">
-          <div v-loading="paramLoading">
-            <div v-for="group in PARAM_GROUPS" :key="group.label" class="param-group">
-              <h4 class="param-group-title">{{ group.label }}</h4>
-              <el-form label-width="140px" size="small">
-                <el-form-item v-for="key in group.keys" :key="key" :label="PARAM_LABELS[key] || key">
-                  <el-input v-model="systemParams[key]" />
-                </el-form-item>
-              </el-form>
+      <UiTabsContent value="notifications" class="mt-6 space-y-6">
+        <UiCard>
+          <UiCardHeader>
+            <UiCardTitle>通知设置</UiCardTitle>
+            <UiCardDescription>配置风控告警的通知方式</UiCardDescription>
+          </UiCardHeader>
+          <UiCardContent class="space-y-6">
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="font-medium">邮件通知</p>
+                  <p class="text-sm text-muted-foreground">通过邮件接收风控告警</p>
+                </div>
+                <UiSwitch v-model:checked="notifications.email_enabled" />
+              </div>
+              <div v-if="notifications.email_enabled" class="space-y-2">
+                <Label>邮箱地址</Label>
+                <div class="flex gap-2">
+                  <Input v-model="notifications.email_address" placeholder="your@email.com" class="flex-1" />
+                  <Button variant="outline" @click="testEmail">测试</Button>
+                </div>
+              </div>
             </div>
 
-            <el-empty v-if="!Object.keys(systemParams).length" description="暂无可配置参数" />
+            <UiSeparator />
 
-            <div style="margin-top: 20px">
-              <el-button type="primary" :loading="saving" @click="saveParams">保存参数</el-button>
-              <el-button @click="resetParams">重置默认</el-button>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="font-medium">Webhook 通知</p>
+                  <p class="text-sm text-muted-foreground">通过 Webhook 推送告警</p>
+                </div>
+                <UiSwitch v-model:checked="notifications.webhook_enabled" />
+              </div>
+              <div v-if="notifications.webhook_enabled" class="space-y-2">
+                <Label>Webhook URL</Label>
+                <Input v-model="notifications.webhook_url" placeholder="https://..." />
+              </div>
             </div>
-          </div>
-        </el-tab-pane>
 
-        <el-tab-pane label="个人设置" name="profile">
-          <div v-loading="profileLoading">
-            <el-descriptions :column="2" border v-if="profile" style="max-width: 600px; margin-bottom: 24px">
-              <el-descriptions-item label="用户名">{{ profile.username }}</el-descriptions-item>
-              <el-descriptions-item label="角色">{{ profile.role }}</el-descriptions-item>
-              <el-descriptions-item label="状态">
-                <el-tag :type="profile.is_active ? 'success' : 'danger'">
-                  {{ profile.is_active ? '正常' : '禁用' }}
-                </el-tag>
-              </el-descriptions-item>
-              <el-descriptions-item label="注册时间">{{ formatDate(profile.created_at) }}</el-descriptions-item>
-            </el-descriptions>
+            <Button @click="saveNotifications">保存设置</Button>
+          </UiCardContent>
+        </UiCard>
+      </UiTabsContent>
 
-            <el-divider />
-            <h4 class="section-title">修改密码</h4>
-            <el-form :model="passwordForm" label-width="100px" style="max-width: 400px">
-              <el-form-item label="当前密码">
-                <el-input v-model="passwordForm.old_password" type="password" show-password />
-              </el-form-item>
-              <el-form-item label="新密码">
-                <el-input v-model="passwordForm.new_password" type="password" show-password />
-              </el-form-item>
-              <el-form-item label="确认密码">
-                <el-input v-model="passwordForm.confirm_password" type="password" show-password />
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" :loading="saving" @click="changePassword">修改密码</el-button>
-              </el-form-item>
-            </el-form>
+      <UiTabsContent value="appearance" class="mt-6 space-y-6">
+        <UiCard>
+          <UiCardHeader>
+            <UiCardTitle>外观</UiCardTitle>
+            <UiCardDescription>自定义界面主题和配色</UiCardDescription>
+          </UiCardHeader>
+          <UiCardContent class="space-y-6">
+            <div class="space-y-3">
+              <Label>主题模式</Label>
+              <div class="flex items-center gap-3">
+                <Button
+                  :variant="!isDark ? 'default' : 'outline'"
+                  size="sm"
+                  @click="toggleTheme"
+                >
+                  {{ isDark ? '切换到亮色' : '切换到暗色' }}
+                </Button>
+              </div>
+            </div>
+
+            <UiSeparator />
+
+            <div class="space-y-3">
+              <Label>主题色</Label>
+              <div class="flex flex-wrap gap-2">
+                <Button
+                  v-for="color in themeColors"
+                  :key="color.value"
+                  :variant="theme === color.value ? 'default' : 'outline'"
+                  size="sm"
+                  @click="setTheme(color.value as any)"
+                >
+                  {{ color.label }}
+                </Button>
+              </div>
+            </div>
+          </UiCardContent>
+        </UiCard>
+      </UiTabsContent>
+    </UiTabs>
+
+    <UiAlertDialog v-model:open="passwordDialog">
+      <UiAlertDialogContent>
+        <UiAlertDialogHeader>
+          <UiAlertDialogTitle>修改密码</UiAlertDialogTitle>
+          <UiAlertDialogDescription>输入旧密码和新密码</UiAlertDialogDescription>
+        </UiAlertDialogHeader>
+        <div class="space-y-4 py-2">
+          <div class="space-y-2">
+            <Label>旧密码</Label>
+            <Input v-model="passwordForm.old_password" type="password" />
           </div>
-        </el-tab-pane>
-      </el-tabs>
-    </el-card>
-  </div>
+          <div class="space-y-2">
+            <Label>新密码</Label>
+            <Input v-model="passwordForm.new_password" type="password" />
+          </div>
+          <div class="space-y-2">
+            <Label>确认新密码</Label>
+            <Input v-model="passwordForm.confirm_password" type="password" />
+          </div>
+        </div>
+        <UiAlertDialogFooter>
+          <UiAlertDialogCancel @click="passwordForm = { old_password: '', new_password: '', confirm_password: '' }">取消</UiAlertDialogCancel>
+          <UiAlertDialogAction @click="handleChangePassword">确认修改</UiAlertDialogAction>
+        </UiAlertDialogFooter>
+      </UiAlertDialogContent>
+    </UiAlertDialog>
+  </BasicPage>
 </template>
-
-<style scoped lang="scss">
-.settings-view {
-  .section-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-
-    h4 {
-      margin: 0;
-    }
-  }
-
-  .section-title {
-    font-size: 14px;
-    margin: 0 0 16px;
-    padding-left: 8px;
-    border-left: 3px solid var(--qp-primary);
-  }
-
-  .broker-card {
-    margin-bottom: 12px;
-
-    :deep(.el-card__body) {
-      padding: 16px;
-    }
-  }
-
-  .param-group {
-    margin-bottom: 20px;
-  }
-
-  .param-group-title {
-    font-size: 14px;
-    color: var(--qp-text-secondary);
-    margin: 0 0 12px;
-    padding-left: 8px;
-    border-left: 3px solid var(--qp-primary);
-  }
-
-  .param-desc {
-    font-size: 12px;
-    color: var(--qp-text-placeholder);
-    margin-top: 4px;
-  }
-}
-</style>

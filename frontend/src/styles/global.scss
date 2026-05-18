@@ -30,12 +30,13 @@
   padding: 0;
   box-sizing: border-box;
   scrollbar-width: thin;
-  scrollbar-color: #c0c4cc transparent;
+  scrollbar-color: color-mix(in srgb, var(--muted-foreground) 35%, transparent) transparent;
 }
 
 html, body {
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: "Manrope", "Noto Sans SC", "PingFang SC", sans-serif;
+  text-rendering: optimizeLegibility;
 }
 
 #app {
@@ -43,8 +44,8 @@ html, body {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -52,43 +53,63 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #c0c4cc;
-  border-radius: 3px;
+  background: color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  border-radius: 999px;
 
   &:hover {
-    background: #909399;
+    background: color-mix(in srgb, var(--muted-foreground) 44%, transparent);
   }
 }
 
-.el-card {
-  transition: box-shadow 0.25s ease;
+body {
+  color: var(--foreground);
 }
 
-.el-button {
-  transition: all 0.2s ease;
-}
-
-.el-tag {
-  transition: all 0.2s ease;
-}
-
-.el-table {
-  transition: opacity 0.3s ease;
-}
-
-.el-dialog {
-  transition: all 0.3s ease;
-}
-
-.el-collapse-item__wrap,
-.el-collapse-item__header {
-  transition: all 0.25s ease;
-}
-
+button,
 input,
 textarea,
 select {
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.el-card,
+.el-button,
+.el-tag,
+.el-table,
+.el-dialog,
+.el-collapse-item__wrap,
+.el-collapse-item__header,
+input,
+textarea,
+select {
+  transition: all 0.2s ease;
+}
+
+.el-card {
+  border-radius: var(--radius) !important;
+  border-color: color-mix(in srgb, var(--border) 85%, transparent) !important;
+  background: color-mix(in oklch, var(--card) 92%, white 8%) !important;
+  box-shadow: 0 10px 34px rgba(15, 23, 42, 0.05) !important;
+}
+
+.el-button--primary {
+  --el-button-bg-color: color-mix(in oklch, var(--primary) 96%, white 4%);
+  --el-button-border-color: color-mix(in oklch, var(--primary) 96%, white 4%);
+  --el-button-hover-bg-color: color-mix(in oklch, var(--primary) 88%, black 8%);
+  --el-button-hover-border-color: color-mix(in oklch, var(--primary) 88%, black 8%);
+}
+
+.el-input__wrapper,
+.el-textarea__inner,
+.el-select__wrapper {
+  border-radius: calc(var(--radius) - 2px) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 84%, transparent) !important;
+  background: color-mix(in oklch, var(--background) 86%, white 14%) !important;
 }
 
 .flex-center {

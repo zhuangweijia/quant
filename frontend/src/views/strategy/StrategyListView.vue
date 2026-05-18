@@ -1,255 +1,219 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
-import { useRouter } from "vue-router";
-import { useStrategyStore } from "@/stores/strategy";
-import { strategyLogApi } from "@/api/strategy";
-import { ElMessage, ElMessageBox } from "element-plus";
-import { STATUS_LABELS, MARKET_LABELS } from "@/utils/constants";
-import { formatDate } from "@/utils/format";
+import { ref, reactive, onMounted, h } from 'vue'
+import { useRouter } from 'vue-router'
+import { toast } from 'vue-sonner'
+import { useStrategyStore } from '@/stores/strategy'
+import { strategyLogApi } from '@/api/strategy'
+import { STATUS_LABELS, MARKET_LABELS } from '@/utils/constants'
+import { formatDate } from '@/utils/format'
+import { BasicPage } from '@/components/global-layout'
+import { DataTable } from '@/components/data-table'
+import type { ColumnDef } from '@tanstack/vue-table'
+import Button from '@/components/ui/button/Button.vue'
+import Badge from '@/components/ui/badge/Badge.vue'
+import {
+  Dialog as UiDialog,
+  DialogContent as UiDialogContent,
+  DialogHeader as UiDialogHeader,
+  DialogTitle as UiDialogTitle,
+  DialogDescription as UiDialogDescription,
+} from '@/components/ui/dialog'
+import {
+  AlertDialog as UiAlertDialog,
+  AlertDialogAction as UiAlertDialogAction,
+  AlertDialogCancel as UiAlertDialogCancel,
+  AlertDialogContent as UiAlertDialogContent,
+  AlertDialogDescription as UiAlertDialogDescription,
+  AlertDialogFooter as UiAlertDialogFooter,
+  AlertDialogHeader as UiAlertDialogHeader,
+  AlertDialogTitle as UiAlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {
+  ScrollArea as UiScrollArea,
+} from '@/components/ui/scroll-area'
+import { Plus } from 'lucide-vue-next'
 
-const router = useRouter();
-const store = useStrategyStore();
-const loading = ref(false);
-const loadingActions = reactive(new Set<string>());
+const router = useRouter()
+const store = useStrategyStore()
+const loading = ref(false)
+const currentPage = ref(1)
+const pageSize = 20
 
-const logDialogVisible = ref(false);
-const logLoading = ref(false);
-const logStrategyName = ref("");
-const logEntries = ref<any[]>([]);
+const logDialogOpen = ref(false)
+const logLoading = ref(false)
+const logStrategyName = ref('')
+const logEntries = ref<any[]>([])
 
-const currentPage = ref(1);
-const pageSize = ref(20);
+const deleteTarget = ref<{ id: string; name: string } | null>(null)
+
+const columns: ColumnDef<any>[] = [
+  { accessorKey: 'name', header: '名称', cell: ({ row }) => h('span', { class: 'font-medium' }, row.getValue('name')) },
+  {
+    accessorKey: 'description',
+    header: '描述',
+    cell: ({ row }) => h('span', { class: 'text-muted-foreground text-sm' }, row.original.description || '—'),
+  },
+  {
+    accessorKey: 'market',
+    header: '市场',
+    cell: ({ row }) => MARKET_LABELS[row.getValue('market') as string] || row.getValue('market'),
+  },
+  {
+    accessorKey: 'status',
+    header: '状态',
+    cell: ({ row }) => {
+      const status = row.getValue('status') as string
+      const info = STATUS_LABELS[status]
+      return h(Badge, { variant: status === 'running' ? 'default' : status === 'error' ? 'destructive' : 'secondary' }, () => info?.label || status)
+    },
+  },
+  {
+    accessorKey: 'updated_at',
+    header: '更新时间',
+    cell: ({ row }) => formatDate(row.getValue('updated_at')),
+  },
+  {
+    id: 'actions',
+    header: '操作',
+    cell: ({ row }) => {
+      const s = row.original
+      return h('div', { class: 'flex gap-1' }, [
+        h(Button, { size: 'sm', variant: 'ghost', onClick: () => router.push(`/strategy/${s.id}/edit`) }, () => '编辑'),
+        s.status === 'running'
+          ? h(Button, { size: 'sm', variant: 'ghost', onClick: () => showLogs(s.id, s.name) }, () => '日志')
+          : null,
+        s.status !== 'running'
+          ? h(Button, { size: 'sm', variant: 'ghost', onClick: () => handleStart(s.id), loading: loadingActions.has(s.id + ':start') }, () => '启动')
+          : null,
+        s.status === 'running'
+          ? h(Button, { size: 'sm', variant: 'ghost', onClick: () => handleStop(s.id), loading: loadingActions.has(s.id + ':stop') }, () => '停止')
+          : null,
+        s.status !== 'running'
+          ? h(Button, { size: 'sm', variant: 'ghost', class: 'text-destructive', onClick: () => { deleteTarget.value = { id: s.id, name: s.name } } }, () => '删除')
+          : null,
+      ].filter(Boolean))
+    },
+  },
+]
+
+const loadingActions = reactive(new Set<string>())
 
 onMounted(async () => {
-  loading.value = true;
-  try {
-    await store.fetchStrategies({ page: currentPage.value, size: pageSize.value });
-  } finally {
-    loading.value = false;
-  }
-});
+  loading.value = true
+  try { await store.fetchStrategies({ page: currentPage.value, size: pageSize }) }
+  finally { loading.value = false }
+})
 
 async function handlePageChange(page: number) {
-  currentPage.value = page;
-  loading.value = true;
-  try {
-    await store.fetchStrategies({ page: currentPage.value, size: pageSize.value });
-  } finally {
-    loading.value = false;
-  }
+  currentPage.value = page
+  loading.value = true
+  try { await store.fetchStrategies({ page: currentPage.value, size: pageSize }) }
+  finally { loading.value = false }
 }
 
 async function handleStart(id: string) {
-  loadingActions.add(id + ":start");
-  try {
-    await store.startStrategy(id);
-    ElMessage.success("策略已启动");
-  } catch (e: any) {
-    ElMessage.error(e.message || "启动失败");
-  } finally {
-    loadingActions.delete(id + ":start");
-  }
+  loadingActions.add(id + ':start')
+  try { await store.startStrategy(id); toast.success('策略已启动') }
+  catch (e: any) { toast.error(e.message || '启动失败') }
+  finally { loadingActions.delete(id + ':start') }
 }
 
 async function handleStop(id: string) {
-  loadingActions.add(id + ":stop");
-  try {
-    await store.stopStrategy(id);
-    ElMessage.success("策略已停止");
-  } catch (e: any) {
-    ElMessage.error(e.message || "停止失败");
-  } finally {
-    loadingActions.delete(id + ":stop");
-  }
+  loadingActions.add(id + ':stop')
+  try { await store.stopStrategy(id); toast.success('策略已停止') }
+  catch (e: any) { toast.error(e.message || '停止失败') }
+  finally { loadingActions.delete(id + ':stop') }
 }
 
-async function handleDelete(id: string, name: string) {
+async function handleDelete() {
+  if (!deleteTarget.value) return
+  const { id } = deleteTarget.value
+  loadingActions.add(id + ':delete')
   try {
-    await ElMessageBox.confirm(`确定删除策略「${name}」？`, "确认", {
-      confirmButtonText: "删除",
-      cancelButtonText: "取消",
-      type: "warning",
-    });
-    loadingActions.add(id + ":delete");
-    try {
-      await store.deleteStrategy(id);
-      ElMessage.success("策略已删除");
-    } finally {
-      loadingActions.delete(id + ":delete");
-    }
-  } catch {
-    // cancelled
+    await store.deleteStrategy(id)
+    toast.success('策略已删除')
+  } catch (e: any) { toast.error(e.message || '删除失败') }
+  finally {
+    loadingActions.delete(id + ':delete')
+    deleteTarget.value = null
   }
 }
 
 async function showLogs(id: string, name: string) {
-  logStrategyName.value = name;
-  logDialogVisible.value = true;
-  logLoading.value = true;
-  logEntries.value = [];
+  logStrategyName.value = name
+  logDialogOpen.value = true
+  logLoading.value = true
+  logEntries.value = []
   try {
-    const res: any = await strategyLogApi.list(id, { limit: 200 });
-    logEntries.value = res.data?.items || [];
-  } catch {
-    ElMessage.error("加载日志失败");
-  } finally {
-    logLoading.value = false;
-  }
+    const res: any = await strategyLogApi.list(id, { limit: 200 })
+    logEntries.value = res.data?.items || []
+  } catch { toast.error('加载日志失败') }
+  finally { logLoading.value = false }
 }
 </script>
 
 <template>
-  <div>
-    <el-card shadow="hover">
-      <template #header>
-        <div class="card-header">
-          <span>策略列表</span>
-          <el-button type="primary" @click="router.push('/strategy/create')">
-            创建策略
-          </el-button>
+  <BasicPage title="策略" description="管理你的量化交易策略">
+    <template #actions>
+      <Button @click="router.push('/strategy/create')">
+        <Plus class="mr-2 size-4" />
+        创建策略
+      </Button>
+    </template>
+
+    <DataTable
+      :columns="columns"
+      :data="store.strategies"
+      :total="store.total"
+      :page-size="pageSize"
+      :loading="loading"
+      @page-change="handlePageChange"
+    />
+
+    <UiDialog v-model:open="logDialogOpen">
+      <UiDialogContent class="max-w-2xl">
+        <UiDialogHeader>
+          <UiDialogTitle>{{ logStrategyName }} - 运行日志</UiDialogTitle>
+          <UiDialogDescription>最近 200 条日志记录</UiDialogDescription>
+        </UiDialogHeader>
+        <div v-if="logLoading" class="flex items-center justify-center py-12">
+          <div class="size-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
         </div>
-      </template>
-
-      <el-table :data="store.strategies" v-loading="loading" stripe>
-        <el-table-column prop="name" label="名称" min-width="150" />
-        <el-table-column prop="description" label="描述" min-width="200">
-          <template #default="{ row }">
-            <span class="text-secondary">{{ row.description || '—' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="market" label="市场" width="120">
-          <template #default="{ row }">
-            {{ MARKET_LABELS[row.market] || row.market }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="120">
-          <template #default="{ row }">
-            <el-tag
-              :type="(STATUS_LABELS[row.status]?.type as any) || 'info'"
-              size="small"
+        <UiScrollArea v-else class="h-[400px]">
+          <div v-if="!logEntries.length" class="py-8 text-center text-sm text-muted-foreground">暂无日志</div>
+          <div v-else class="space-y-0 font-mono text-xs">
+            <div
+              v-for="(entry, idx) in logEntries"
+              :key="idx"
+              class="flex items-start gap-2 py-2 border-b last:border-0"
             >
-              {{ STATUS_LABELS[row.status]?.label || row.status }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="updated_at" label="更新时间" width="180">
-          <template #default="{ row }">
-            {{ formatDate(row.updated_at) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="300" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" @click="router.push(`/strategy/${row.id}/edit`)">
-              编辑
-            </el-button>
-            <el-button
-              v-if="row.status === 'running'"
-              size="small"
-              type="info"
-              @click="showLogs(row.id, row.name)"
-            >
-              日志
-            </el-button>
-            <el-button
-              v-if="row.status !== 'running'"
-              size="small"
-              type="success"
-              :loading="loadingActions.has(row.id + ':start')"
-              @click="handleStart(row.id)"
-            >
-              启动
-            </el-button>
-            <el-button
-              v-if="row.status === 'running'"
-              size="small"
-              type="warning"
-              :loading="loadingActions.has(row.id + ':stop')"
-              @click="handleStop(row.id)"
-            >
-              停止
-            </el-button>
-            <el-button
-              v-if="row.status !== 'running'"
-              size="small"
-              type="danger"
-              :loading="loadingActions.has(row.id + ':delete')"
-              @click="handleDelete(row.id, row.name)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div style="margin-top: 16px; display: flex; justify-content: flex-end">
-        <el-pagination
-          v-model:current-page="currentPage"
-          :page-size="pageSize"
-          :total="store.total"
-          layout="total, prev, pager, next"
-          @current-change="handlePageChange"
-        />
-      </div>
-    </el-card>
-
-    <el-dialog v-model="logDialogVisible" :title="`${logStrategyName} - 运行日志`" width="720px" top="6vh">
-      <div v-loading="logLoading" class="log-container">
-        <el-empty v-if="!logLoading && !logEntries.length" description="暂无日志" />
-        <div v-else class="log-entries">
-          <div v-for="(entry, idx) in logEntries" :key="idx" class="log-entry">
-            <span class="log-time">{{ formatDate(entry.created_at) }}</span>
-            <el-tag :type="entry.level === 'error' ? 'danger' : entry.level === 'warning' ? 'warning' : 'info'" size="small">
-              {{ entry.level }}
-            </el-tag>
-            <span class="log-msg">{{ entry.message }}</span>
+              <span class="text-muted-foreground whitespace-nowrap shrink-0">{{ formatDate(entry.created_at) }}</span>
+              <Badge
+                :variant="entry.level === 'error' ? 'destructive' : entry.level === 'warning' ? 'outline' : 'secondary'"
+                class="text-[10px] px-1.5 py-0 shrink-0"
+              >
+                {{ entry.level }}
+              </Badge>
+              <span class="break-all">{{ entry.message }}</span>
+            </div>
           </div>
-        </div>
-      </div>
-    </el-dialog>
-  </div>
+        </UiScrollArea>
+      </UiDialogContent>
+    </UiDialog>
+
+    <UiAlertDialog :open="!!deleteTarget" @update:open="!$event && (deleteTarget = null)">
+      <UiAlertDialogContent>
+        <UiAlertDialogHeader>
+          <UiAlertDialogTitle>确认删除</UiAlertDialogTitle>
+          <UiAlertDialogDescription>
+            确定删除策略「{{ deleteTarget?.name }}」？此操作不可撤销。
+          </UiAlertDialogDescription>
+        </UiAlertDialogHeader>
+        <UiAlertDialogFooter>
+          <UiAlertDialogCancel>取消</UiAlertDialogCancel>
+          <UiAlertDialogAction @click="handleDelete">删除</UiAlertDialogAction>
+        </UiAlertDialogFooter>
+      </UiAlertDialogContent>
+    </UiAlertDialog>
+  </BasicPage>
 </template>
-
-<style scoped lang="scss">
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.text-secondary {
-  color: var(--qp-text-secondary);
-  font-size: 13px;
-}
-
-.log-container {
-  max-height: 480px;
-  overflow-y: auto;
-}
-
-.log-entries {
-  font-family: 'Courier New', Courier, monospace;
-  font-size: 12px;
-}
-
-.log-entry {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  border-bottom: 1px solid var(--qp-border-color, #eee);
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.log-time {
-  color: var(--qp-text-secondary);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.log-msg {
-  word-break: break-all;
-}
-</style>
