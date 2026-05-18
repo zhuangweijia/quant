@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, h } from 'vue'
+import { ref, computed, h } from 'vue'
 import { toast } from 'vue-sonner'
-import { strategyApi } from '@/api/strategy'
-import { useBacktestStore } from '@/stores/backtest'
+import { backtestApi } from '@/api/backtest'
+import { useBacktestResults, useRunBacktest, useDeleteBacktestResult } from '@/composables/useBacktestQuery'
+import { useStrategyList } from '@/composables/useStrategyQuery'
 import { formatPercent, formatDate } from '@/utils/format'
 import { BasicPage } from '@/components/global-layout'
 import { DataTable } from '@/components/data-table'
@@ -43,16 +44,11 @@ import {
 } from '@/components/ui/alert-dialog'
 import UiProgress from '@/components/ui/progress/Progress.vue'
 import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { LineChart, BarChart } from 'echarts/charts'
-import { TitleComponent, TooltipComponent, GridComponent, DataZoomComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { registerECharts } from '@/utils/echarts'
 import { Play } from 'lucide-vue-next'
 
-use([TitleComponent, TooltipComponent, GridComponent, DataZoomComponent, LineChart, BarChart, CanvasRenderer])
+registerECharts()
 
-const backtestStore = useBacktestStore()
-const strategies = ref<any[]>([])
 const runForm = ref({
   strategy_id: '',
   symbol: 'BTCUSDT',
@@ -71,7 +67,16 @@ const deleteTarget = ref<string | null>(null)
 
 const currentPage = ref(1)
 const pageSize = 20
-const loading = ref(false)
+
+const listParams = computed(() => ({ page: currentPage.value, size: pageSize }))
+const { data: resultsData, isLoading: resultsLoading } = useBacktestResults(listParams)
+const { data: strategyListData } = useStrategyList()
+const runMutation = useRunBacktest()
+const deleteMutation = useDeleteBacktestResult()
+
+const strategies = computed(() => strategyListData.value?.items || [])
+const results = computed(() => resultsData.value?.items || [])
+const resultsTotal = computed(() => resultsData.value?.total || 0)
 
 const resultColumns: ColumnDef<any>[] = [
   {
@@ -110,18 +115,13 @@ const resultColumns: ColumnDef<any>[] = [
   },
 ]
 
-async function loadStrategies() {
-  const res: any = await strategyApi.list()
-  strategies.value = res.data?.items || []
-}
-
 async function handleRun() {
   if (!runForm.value.strategy_id) { toast.error('请选择策略'); return }
   if (!runForm.value.start_date || !runForm.value.end_date) { toast.error('请选择日期范围'); return }
   try {
-    const result = await backtestStore.runBacktest(runForm.value as any)
+    const result = await runMutation.mutateAsync(runForm.value as any)
     toast.success('回测完成')
-    if (result) showDetail(result)
+    if (result) showDetail((result as any).data || result)
   } catch (e: any) { toast.error(e.message || '回测失败') }
 }
 
@@ -157,35 +157,26 @@ function showDetail(row: any) {
 
 async function handleViewResult(row: any) {
   try {
-    await backtestStore.fetchResult(row.id)
-    showDetail(backtestStore.currentResult)
+    const res = await backtestApi.getResult(row.id)
+    showDetail(res.data.data)
   } catch (e: any) { toast.error(e.message) }
 }
 
 async function handleDelete() {
   if (!deleteTarget.value) return
-  await backtestStore.deleteResult(deleteTarget.value)
+  await deleteMutation.mutateAsync(deleteTarget.value)
   toast.success('已删除')
   deleteTarget.value = null
 }
 
-async function handlePageChange(page: number) {
+function handlePageChange(page: number) {
   currentPage.value = page
-  loading.value = true
-  try { await backtestStore.fetchResults({ page: currentPage.value, size: pageSize }) }
-  finally { loading.value = false }
 }
 
 function formatMetric(val: any) {
   if (val === null || val === undefined) return '-'
   return Number(val).toFixed(2)
 }
-
-onMounted(() => {
-  loadStrategies()
-  loading.value = true
-  backtestStore.fetchResults({ page: 1, size: pageSize }).finally(() => { loading.value = false })
-})
 </script>
 
 <template>
@@ -220,7 +211,7 @@ onMounted(() => {
               <Input v-model="runForm.end_date" type="date" />
             </div>
           </div>
-          <div v-if="backtestStore.running" class="mt-4">
+          <div v-if="runMutation.isPending.value" class="mt-4">
             <UiProgress :model-value="100" class="animate-pulse" />
             <p class="text-sm text-muted-foreground mt-2">回测运行中...</p>
           </div>
@@ -233,10 +224,10 @@ onMounted(() => {
 
       <DataTable
         :columns="resultColumns"
-        :data="backtestStore.results"
-        :total="backtestStore.total"
+        :data="results"
+        :total="resultsTotal"
         :page-size="pageSize"
-        :loading="loading"
+        :loading="resultsLoading"
         @page-change="handlePageChange"
       />
 

@@ -3,7 +3,6 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
 import {
-  Command as UiCommand,
   CommandDialog as UiCommandDialog,
   CommandEmpty as UiCommandEmpty,
   CommandGroup as UiCommandGroup,
@@ -55,8 +54,14 @@ function handleKeyDown(e: KeyboardEvent) {
   }
 }
 
+function setOpen(value: boolean) {
+  open.value = value
+}
+
 onMounted(() => document.addEventListener('keydown', handleKeyDown))
 onUnmounted(() => document.removeEventListener('keydown', handleKeyDown))
+
+defineExpose({ setOpen })
 </script>
 
 <template>

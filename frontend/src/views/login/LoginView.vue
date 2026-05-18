@@ -2,6 +2,9 @@
 import { ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
+import { toTypedSchema } from '@vee-validate/zod'
+import { useForm } from 'vee-validate'
+import { z } from 'zod'
 import Button from '@/components/ui/button/Button.vue'
 import { Card as UiCard, CardHeader as UiCardHeader, CardContent as UiCardContent, CardTitle as UiCardTitle, CardDescription as UiCardDescription } from '@/components/ui/card'
 import Input from '@/components/ui/input/Input.vue'
@@ -16,32 +19,55 @@ const authStore = useAuthStore()
 
 const isRegister = ref(false)
 const loading = ref(false)
-const form = ref({
-  username: '',
-  password: '',
-  confirm_password: '',
+
+const loginSchema = z.object({
+  username: z.string().min(3, '用户名至少 3 个字符').max(64, '用户名最多 64 个字符'),
+  password: z.string().min(8, '密码至少 8 个字符').max(64, '密码最多 64 个字符'),
+  confirm_password: z.string().optional(),
 })
 
-async function handleSubmit() {
-  if (!form.value.username || !form.value.password) {
-    toast.error('请填写用户名和密码')
-    return
+const registerSchema = loginSchema.extend({
+  confirm_password: z.string().min(8, '密码至少 8 个字符'),
+}).refine(data => data.password === data.confirm_password, {
+  message: '两次密码不一致',
+  path: ['confirm_password'],
+})
+
+const { handleSubmit, errors, setValues, setFieldError, defineField } = useForm({
+  validationSchema: toTypedSchema(loginSchema),
+  initialValues: { username: '', password: '', confirm_password: '' },
+})
+
+const [username, usernameAttrs] = defineField('username')
+const [password, passwordAttrs] = defineField('password')
+const [confirmPassword, confirmPasswordAttrs] = defineField('confirm_password')
+
+const toggleMode = () => {
+  isRegister.value = !isRegister.value
+  setValues({ username: '', password: '', confirm_password: '' })
+}
+
+const onSubmit = handleSubmit(async (values) => {
+  if (isRegister.value) {
+    const result = registerSchema.safeParse(values)
+    if (!result.success) {
+      for (const issue of result.error.issues) {
+        const field = issue.path[0] as 'username' | 'password' | 'confirm_password'
+        setFieldError(field, issue.message)
+      }
+      return
+    }
   }
 
   loading.value = true
   try {
     if (isRegister.value) {
-      if (form.value.password !== form.value.confirm_password) {
-        toast.error('两次密码不一致')
-        return
-      }
-      await authStore.register(form.value)
+      await authStore.register(values as any)
       toast.success('注册成功，请使用新账户登录')
       isRegister.value = false
-      form.value.password = ''
-      form.value.confirm_password = ''
+      setValues({ username: '', password: '', confirm_password: '' })
     } else {
-      await authStore.login(form.value)
+      await authStore.login({ username: values.username, password: values.password })
       const redirect = (route.query.redirect as string) || '/'
       router.push(redirect)
     }
@@ -50,7 +76,7 @@ async function handleSubmit() {
   } finally {
     loading.value = false
   }
-}
+})
 </script>
 
 <template>
@@ -94,20 +120,21 @@ async function handleSubmit() {
           </UiCardDescription>
         </UiCardHeader>
         <UiCardContent>
-          <form class="space-y-4" @submit.prevent="handleSubmit">
+          <form class="space-y-4" @submit.prevent="onSubmit">
             <div class="space-y-2">
               <Label for="username">用户名</Label>
               <div class="relative">
                 <UserRound class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                 <Input
                   id="username"
-                  v-model="form.username"
+                  v-model="username"
+                  v-bind="usernameAttrs"
                   placeholder="输入用户名"
                   class="pl-9"
-                  minlength="3"
-                  maxlength="64"
+                  :aria-invalid="!!errors.username"
                 />
               </div>
+              <p v-if="errors.username" class="text-xs text-destructive mt-1">{{ errors.username }}</p>
             </div>
 
             <div class="space-y-2">
@@ -116,14 +143,15 @@ async function handleSubmit() {
                 <LockKeyhole class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                 <Input
                   id="password"
-                  v-model="form.password"
+                  v-model="password"
+                  v-bind="passwordAttrs"
                   type="password"
                   placeholder="输入密码"
                   class="pl-9"
-                  minlength="8"
-                  maxlength="64"
+                  :aria-invalid="!!errors.password"
                 />
               </div>
+              <p v-if="errors.password" class="text-xs text-destructive mt-1">{{ errors.password }}</p>
             </div>
 
             <div v-if="isRegister" class="space-y-2">
@@ -132,12 +160,15 @@ async function handleSubmit() {
                 <LockKeyhole class="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
                 <Input
                   id="confirm_password"
-                  v-model="form.confirm_password"
+                  v-model="confirmPassword"
+                  v-bind="confirmPasswordAttrs"
                   type="password"
                   placeholder="再次输入密码"
                   class="pl-9"
+                  :aria-invalid="!!errors.confirm_password"
                 />
               </div>
+              <p v-if="errors.confirm_password" class="text-xs text-destructive mt-1">{{ errors.confirm_password }}</p>
             </div>
 
             <Button type="submit" size="lg" :loading="loading" class="w-full">
@@ -151,7 +182,7 @@ async function handleSubmit() {
             <button
               type="button"
               class="text-primary font-medium hover:underline ml-1"
-              @click="isRegister = !isRegister"
+              @click="toggleMode"
             >
               {{ isRegister ? '返回登录' : '立即注册' }}
             </button>

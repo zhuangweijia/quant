@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted, h } from 'vue'
+import { ref, reactive, computed, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { useStrategyStore } from '@/stores/strategy'
+import { useStrategyList, useStartStrategy, useStopStrategy, useDeleteStrategy } from '@/composables/useStrategyQuery'
 import { strategyLogApi } from '@/api/strategy'
 import { STATUS_LABELS, MARKET_LABELS } from '@/utils/constants'
 import { formatDate } from '@/utils/format'
@@ -34,10 +34,18 @@ import {
 import { Plus } from 'lucide-vue-next'
 
 const router = useRouter()
-const store = useStrategyStore()
-const loading = ref(false)
 const currentPage = ref(1)
 const pageSize = 20
+
+const listParams = computed(() => ({ page: currentPage.value, size: pageSize }))
+const strategyListQuery = useStrategyList(listParams)
+const startMutation = useStartStrategy()
+const stopMutation = useStopStrategy()
+const deleteMutation = useDeleteStrategy()
+
+const tableData = computed(() => strategyListQuery.data.value?.items || [])
+const tableTotal = computed(() => strategyListQuery.data.value?.total || 0)
+const loading = computed(() => strategyListQuery.isLoading.value)
 
 const logDialogOpen = ref(false)
 const logLoading = ref(false)
@@ -45,6 +53,8 @@ const logStrategyName = ref('')
 const logEntries = ref<any[]>([])
 
 const deleteTarget = ref<{ id: string; name: string } | null>(null)
+
+const loadingActions = reactive(new Set<string>())
 
 const columns: ColumnDef<any>[] = [
   { accessorKey: 'name', header: '名称', cell: ({ row }) => h('span', { class: 'font-medium' }, row.getValue('name')) },
@@ -96,31 +106,20 @@ const columns: ColumnDef<any>[] = [
   },
 ]
 
-const loadingActions = reactive(new Set<string>())
-
-onMounted(async () => {
-  loading.value = true
-  try { await store.fetchStrategies({ page: currentPage.value, size: pageSize }) }
-  finally { loading.value = false }
-})
-
-async function handlePageChange(page: number) {
+function handlePageChange(page: number) {
   currentPage.value = page
-  loading.value = true
-  try { await store.fetchStrategies({ page: currentPage.value, size: pageSize }) }
-  finally { loading.value = false }
 }
 
 async function handleStart(id: string) {
   loadingActions.add(id + ':start')
-  try { await store.startStrategy(id); toast.success('策略已启动') }
+  try { await startMutation.mutateAsync(id); toast.success('策略已启动') }
   catch (e: any) { toast.error(e.message || '启动失败') }
   finally { loadingActions.delete(id + ':start') }
 }
 
 async function handleStop(id: string) {
   loadingActions.add(id + ':stop')
-  try { await store.stopStrategy(id); toast.success('策略已停止') }
+  try { await stopMutation.mutateAsync(id); toast.success('策略已停止') }
   catch (e: any) { toast.error(e.message || '停止失败') }
   finally { loadingActions.delete(id + ':stop') }
 }
@@ -130,7 +129,7 @@ async function handleDelete() {
   const { id } = deleteTarget.value
   loadingActions.add(id + ':delete')
   try {
-    await store.deleteStrategy(id)
+    await deleteMutation.mutateAsync(id)
     toast.success('策略已删除')
   } catch (e: any) { toast.error(e.message || '删除失败') }
   finally {
@@ -163,8 +162,8 @@ async function showLogs(id: string, name: string) {
 
     <DataTable
       :columns="columns"
-      :data="store.strategies"
-      :total="store.total"
+      :data="tableData"
+      :total="tableTotal"
       :page-size="pageSize"
       :loading="loading"
       @page-change="handlePageChange"

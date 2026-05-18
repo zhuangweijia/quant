@@ -49,6 +49,9 @@ export default defineConfig(({ mode }) => {
           manualChunks: (id: string) => {
             if (id.includes('node_modules/vue/') || id.includes('node_modules/vue-router/') || id.includes('node_modules/pinia/')) return 'vue'
             if (id.includes('node_modules/echarts/') || id.includes('node_modules/vue-echarts/')) return 'echarts'
+            if (id.includes('node_modules/lucide-vue-next/')) return 'lucide'
+            if (id.includes('node_modules/reka-ui/')) return 'reka-ui'
+            if (id.includes('node_modules/@tanstack/vue-table/')) return 'tanstack-table'
           },
         },
       },

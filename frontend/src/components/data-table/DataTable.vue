@@ -82,8 +82,11 @@ const table = useVueTable({
           </template>
           <template v-else>
             <UiTableRow>
-              <UiTableCell :colspan="columns.length" class="h-24 text-center text-muted-foreground">
-                暂无数据
+              <UiTableCell :colspan="columns.length" class="h-32">
+                <div class="flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                  <svg xmlns="http://www.w3.org/2000/svg" class="size-10 opacity-40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3z"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+                  <p class="text-sm">暂无数据</p>
+                </div>
               </UiTableCell>
             </UiTableRow>
           </template>

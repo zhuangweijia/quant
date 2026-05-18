@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 
 export type ThemeColor = 'zinc' | 'red' | 'rose' | 'orange' | 'green' | 'blue' | 'yellow' | 'violet'
 
@@ -9,6 +9,12 @@ export const useThemeStore = defineStore('theme', () => {
   const colorMode = ref<'light' | 'dark' | 'system'>(
     (localStorage.getItem('qp-color-mode') as 'light' | 'dark' | 'system') || 'system'
   )
+  const isSystemDark = ref(false)
+
+  const isDark = computed(() => {
+    if (colorMode.value === 'system') return isSystemDark.value
+    return colorMode.value === 'dark'
+  })
 
   function setTheme(color: ThemeColor) {
     theme.value = color
@@ -39,20 +45,20 @@ export const useThemeStore = defineStore('theme', () => {
   }
 
   function applyColorMode() {
+    isSystemDark.value = window.matchMedia('(prefers-color-scheme: dark)').matches
     const el = document.documentElement
-    const isDark =
-      colorMode.value === 'dark' ||
-      (colorMode.value === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-    el.classList.toggle('dark', isDark)
+    const dark = colorMode.value === 'dark' || (colorMode.value === 'system' && isSystemDark.value)
+    el.classList.toggle('dark', dark)
   }
 
   function initTheme() {
     applyTheme()
-    applyColorMode()
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    const mql = window.matchMedia('(prefers-color-scheme: dark)')
+    const handler = () => {
       if (colorMode.value === 'system') applyColorMode()
-    })
+    }
+    mql.addEventListener('change', handler)
   }
 
-  return { theme, radius, colorMode, setTheme, setRadius, setColorMode, initTheme }
+  return { theme, radius, colorMode, isDark, setTheme, setRadius, setColorMode, initTheme }
 })

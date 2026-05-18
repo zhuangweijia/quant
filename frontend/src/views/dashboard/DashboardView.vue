@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { toast } from 'vue-sonner'
-import { dashboardApi } from '@/api/dashboard'
-import { tradeApi } from '@/api/trade'
-import { useTradeStore } from '@/stores/trade'
-import { useRiskStore } from '@/stores/risk'
+import { useDashboardOverview, useDashboardEquityCurve, useDashboardStrategyRanking } from '@/composables/useDashboardQuery'
+import { usePositions, useOrders } from '@/composables/useTradeQuery'
+import { useUnreadAlertCount } from '@/composables/useRiskQuery'
 import { BasicPage } from '@/components/global-layout'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
@@ -26,16 +24,7 @@ import {
 } from '@/components/ui/table'
 import UiSkeleton from '@/components/ui/skeleton/Skeleton.vue'
 import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { LineChart, PieChart } from 'echarts/charts'
-import {
-  TitleComponent,
-  TooltipComponent,
-  LegendComponent,
-  GridComponent,
-  DataZoomComponent,
-} from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
+import { registerECharts } from '@/utils/echarts'
 import {
   Activity,
   ArrowUpRight,
@@ -44,85 +33,68 @@ import {
 } from 'lucide-vue-next'
 import { formatCurrency, formatPercent, formatCompactNumber, formatDate } from '@/utils/format'
 
-use([TitleComponent, TooltipComponent, LegendComponent, GridComponent, DataZoomComponent, LineChart, PieChart, CanvasRenderer])
+registerECharts()
 
 const router = useRouter()
-const tradeStore = useTradeStore()
-const riskStore = useRiskStore()
-const overview = ref<any>(null)
 const equityRange = ref('1M')
-const loading = ref(false)
-
-const equityOption = ref<any>({})
-const positionOption = ref<any>({})
-const recentOrders = ref<any[]>([])
-const strategyRanking = ref<any[]>([])
 const rangeOptions = ['1D', '1W', '1M', '3M', '1Y', 'ALL']
 
-async function loadData() {
-  loading.value = true
-  try {
-    const [overviewRes, equityRes, rankRes, ordersRes] = await Promise.allSettled([
-      dashboardApi.getOverview(),
-      dashboardApi.getEquityCurve({ range: equityRange.value }),
-      dashboardApi.getStrategyRanking(),
-      tradeApi.getOrders({ page: 1, page_size: 5 }),
-    ])
+const overviewQuery = useDashboardOverview()
+const equityCurveQuery = useDashboardEquityCurve(equityRange)
+const strategyRankingQuery = useDashboardStrategyRanking()
+const positionsQuery = usePositions()
+const ordersQuery = useOrders({ page: 1, page_size: 5 })
+const alertCountQuery = useUnreadAlertCount()
 
-    if (overviewRes.status === 'fulfilled') overview.value = (overviewRes.value as any).data
-    if (ordersRes.status === 'fulfilled') recentOrders.value = (ordersRes.value as any).data?.items || []
-    if (rankRes.status === 'fulfilled') strategyRanking.value = (rankRes.value as any).data || []
+const overview = computed(() => overviewQuery.data.value)
+const loading = computed(() => overviewQuery.isLoading.value)
+const strategyRanking = computed(() => strategyRankingQuery.data.value || [])
+const recentOrders = computed(() => (ordersQuery.data.value as any)?.items || [])
+const unreadCount = computed(() => alertCountQuery.data.value ?? 0)
 
-    if (equityRes.status === 'fulfilled') {
-      const points = (equityRes.value as any).data || []
-      equityOption.value = {
-        tooltip: { trigger: 'axis' },
-        grid: { left: 80, right: 30, top: 30, bottom: 40 },
-        xAxis: { type: 'category', data: points.map((p: any) => p.date), boundaryGap: false },
-        yAxis: { type: 'value', scale: true, axisLabel: { formatter: (v: number) => formatCompactNumber(v) } },
-        dataZoom: [{ type: 'inside' }],
-        series: [
-          {
-            name: '权益',
-            type: 'line',
-            data: points.map((p: any) => p.equity),
-            smooth: true,
-            lineStyle: { width: 2, color: 'hsl(var(--primary))' },
-            areaStyle: {
-              color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
-                { offset: 0, color: 'rgba(59,130,246,0.3)' },
-                { offset: 1, color: 'rgba(59,130,246,0.02)' },
-              ] },
-            },
-          },
-        ],
-      }
-    }
-
-    if (overview.value) {
-      await tradeStore.fetchPositions()
-      const positions = tradeStore.positions
-      const posData = positions.slice(0, 6).map((p: any) => ({
-        name: p.symbol,
-        value: parseFloat(p.qty) * parseFloat(p.avg_price || 0),
-      }))
-      positionOption.value = {
-        tooltip: { trigger: 'item', formatter: '{b}: ¥{c}' },
-        series: [{
-          type: 'pie', radius: ['40%', '70%'],
-          data: posData.length ? posData : [{ name: '暂无持仓', value: 1 }],
-          label: { fontSize: 12 },
-        }],
-      }
-    }
-  } catch {
-    toast.error('看板数据加载失败')
-  } finally {
-    loading.value = false
+const equityOption = computed(() => {
+  const points = equityCurveQuery.data.value || []
+  return {
+    tooltip: { trigger: 'axis' },
+    grid: { left: 80, right: 30, top: 30, bottom: 40 },
+    xAxis: { type: 'category', data: points.map((p: any) => p.date), boundaryGap: false },
+    yAxis: { type: 'value', scale: true, axisLabel: { formatter: (v: number) => formatCompactNumber(v) } },
+    dataZoom: [{ type: 'inside' }],
+    series: [
+      {
+        name: '权益',
+        type: 'line',
+        data: points.map((p: any) => p.equity),
+        smooth: true,
+        lineStyle: { width: 2, color: '#3b82f6' },
+        areaStyle: {
+          color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
+            { offset: 0, color: 'rgba(59,130,246,0.3)' },
+            { offset: 1, color: 'rgba(59,130,246,0.02)' },
+          ] },
+        },
+      },
+    ],
   }
-}
+})
 
-function onRangeChange() { loadData() }
+const positionOption = computed(() => {
+  const positions = positionsQuery.data.value || []
+  const posData = positions.slice(0, 6).map((p: any) => ({
+    name: p.symbol,
+    value: parseFloat(p.qty) * parseFloat(p.avg_price || 0),
+  }))
+  return {
+    tooltip: { trigger: 'item', formatter: '{b}: ¥{c}' },
+    series: [{
+      type: 'pie', radius: ['40%', '70%'],
+      data: posData.length ? posData : [{ name: '暂无持仓', value: 1 }],
+      label: { fontSize: 12 },
+    }],
+  }
+})
+
+function onRangeChange() {}
 
 function getPnlColor(val: any) {
   const n = Number(val)
@@ -140,11 +112,6 @@ function orderStatusVariant(status: string) {
 function orderStatusLabel(status: string) {
   return ({ filled: '已成交', pending: '待成交', submitted: '已提交', cancelled: '已撤单', rejected: '已拒绝' } as Record<string, string>)[status] || status
 }
-
-onMounted(() => {
-  loadData()
-  riskStore.fetchUnreadCount()
-})
 </script>
 
 <template>
@@ -221,7 +188,7 @@ onMounted(() => {
             </div>
             <template v-else>
               <div class="text-2xl font-bold">{{ overview?.running_strategies || 0 }} / {{ overview?.total_strategies || 0 }}</div>
-              <p class="text-xs text-muted-foreground mt-1">未读风控通知：{{ riskStore.unreadCount }}</p>
+              <p class="text-xs text-muted-foreground mt-1">未读风控通知：{{ unreadCount }}</p>
             </template>
           </UiCardContent>
         </UiCard>

@@ -26,15 +26,10 @@ import {
   ScrollArea as UiScrollArea,
 } from '@/components/ui/scroll-area'
 import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { CandlestickChart, BarChart } from 'echarts/charts'
-import {
-  TitleComponent, TooltipComponent, LegendComponent, GridComponent, DataZoomComponent,
-} from 'echarts/components'
+import { registerECharts } from '@/utils/echarts'
 import { X, Search } from 'lucide-vue-next'
 
-use([CanvasRenderer, CandlestickChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, DataZoomComponent])
+registerECharts()
 
 const store = useMarketStore()
 const keyword = ref('')

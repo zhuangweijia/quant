@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import { Toaster } from '@/components/ui/sonner'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
@@ -7,6 +7,14 @@ import { wsClient } from '@/utils/websocket'
 
 const themeStore = useThemeStore()
 const authStore = useAuthStore()
+
+watch(() => authStore.isLoggedIn, (loggedIn, wasLoggedIn) => {
+  if (loggedIn && !wasLoggedIn) {
+    wsClient.connect()
+  } else if (!loggedIn && wasLoggedIn) {
+    wsClient.disconnect()
+  }
+})
 
 onMounted(async () => {
   themeStore.initTheme()

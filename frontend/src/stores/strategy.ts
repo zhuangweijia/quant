@@ -10,8 +10,8 @@ export const useStrategyStore = defineStore("strategy", () => {
 
   async function fetchStrategies(params?: Record<string, any>) {
     const res: any = await strategyApi.list(params);
-    strategies.value = res.data.items;
-    total.value = res.data.total;
+    strategies.value = res.data?.items || [];
+    total.value = res.data?.total || 0;
   }
 
   async function fetchDetail(id: string) {

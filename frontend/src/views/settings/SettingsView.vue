@@ -1,8 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, watch, computed } from 'vue'
 import { toast } from 'vue-sonner'
 import { useTheme } from '@/composables/useTheme'
-import { settingsApi } from '@/api/settings'
+import {
+  useProfile,
+  useBrokers,
+  useTradingMode,
+  useNotifications,
+  useUpdateBroker,
+  useTestBroker,
+  useUpdateTradingMode,
+  useUpdateNotifications,
+  useTestEmail,
+  useChangePassword,
+} from '@/composables/useSettingsQuery'
 import { BasicPage } from '@/components/global-layout'
 import Button from '@/components/ui/button/Button.vue'
 import Label from '@/components/ui/label/Label.vue'
@@ -44,7 +55,22 @@ import {
 } from '@/components/ui/alert-dialog'
 
 const { isDark, toggleTheme, theme, setTheme } = useTheme()
-const loading = ref(false)
+
+const { data: profileData, isLoading: profileLoading } = useProfile()
+const { data: brokersData, isLoading: brokersLoading } = useBrokers()
+const { data: tradingModeData, isLoading: tradingModeLoading } = useTradingMode()
+const { data: notificationsData, isLoading: notificationsLoading } = useNotifications()
+
+const updateBroker = useUpdateBroker()
+const testBrokerMutation = useTestBroker()
+const updateTradingMode = useUpdateTradingMode()
+const updateNotifications = useUpdateNotifications()
+const testEmailMutation = useTestEmail()
+const changePasswordMutation = useChangePassword()
+
+const loading = computed(() =>
+  profileLoading.value || brokersLoading.value || tradingModeLoading.value || notificationsLoading.value,
+)
 const activeTab = ref('profile')
 
 const profile = ref({ username: '', email: '' })
@@ -68,70 +94,67 @@ const themeColors = [
   { value: 'violet', label: 'Violet' },
 ]
 
-async function loadSettings() {
-  loading.value = true
-  try {
-    const [profileRes, brokerRes, modeRes, notifRes] = await Promise.allSettled([
-      settingsApi.getProfile(),
-      settingsApi.getBrokers(),
-      settingsApi.getTradingMode(),
-      settingsApi.getNotifications(),
-    ])
-    if (profileRes.status === 'fulfilled') {
-      const d = (profileRes.value as any).data
-      profile.value = { username: d?.username || '', email: d?.email || '' }
+watch(profileData, (d: any) => {
+  if (d) {
+    profile.value = { username: d.username || '', email: d.email || '' }
+  }
+})
+
+watch(brokersData, (d: any) => {
+  if (Array.isArray(d) && d.length) {
+    brokerName.value = d[0].broker_name || 'default'
+    broker.value = { api_key: d[0].api_key || '', api_secret: d[0].api_secret || '', testnet: d[0].testnet || false }
+  }
+})
+
+watch(tradingModeData, (d: any) => {
+  if (d) {
+    tradingMode.value = d.mode || 'paper'
+  }
+})
+
+watch(notificationsData, (d: any) => {
+  if (d) {
+    notifications.value = {
+      email_enabled: d.email_enabled || false,
+      webhook_enabled: d.webhook_enabled || false,
+      email_address: d.email_address || '',
+      webhook_url: d.webhook_url || '',
     }
-    if (brokerRes.status === 'fulfilled') {
-      const d = (brokerRes.value as any).data
-      if (Array.isArray(d) && d.length) {
-        brokerName.value = d[0].broker_name || 'default'
-        broker.value = { api_key: d[0].api_key || '', api_secret: d[0].api_secret || '', testnet: d[0].testnet || false }
-      }
-    }
-    if (modeRes.status === 'fulfilled') tradingMode.value = (modeRes.value as any).data?.mode || 'paper'
-    if (notifRes.status === 'fulfilled') {
-      const d = (notifRes.value as any).data
-      notifications.value = {
-        email_enabled: d?.email_enabled || false,
-        webhook_enabled: d?.webhook_enabled || false,
-        email_address: d?.email_address || '',
-        webhook_url: d?.webhook_url || '',
-      }
-    }
-  } finally { loading.value = false }
-}
+  }
+})
 
 async function saveBroker() {
   try {
-    await settingsApi.updateBroker(brokerName.value, broker.value)
+    await updateBroker.mutateAsync({ brokerName: brokerName.value, data: broker.value })
     toast.success('券商配置已保存')
   } catch (e: any) { toast.error(e.message || '保存失败') }
 }
 
 async function testBrokerConnection() {
   try {
-    await settingsApi.testBroker(brokerName.value)
+    await testBrokerMutation.mutateAsync(brokerName.value)
     toast.success('连接测试成功')
   } catch (e: any) { toast.error(e.message || '连接测试失败') }
 }
 
 async function saveTradingMode() {
   try {
-    await settingsApi.updateTradingMode({ mode: tradingMode.value })
+    await updateTradingMode.mutateAsync({ mode: tradingMode.value } as any)
     toast.success('交易模式已更新')
   } catch (e: any) { toast.error(e.message || '保存失败') }
 }
 
 async function saveNotifications() {
   try {
-    await settingsApi.updateNotifications(notifications.value as any)
+    await updateNotifications.mutateAsync(notifications.value as any)
     toast.success('通知设置已保存')
   } catch (e: any) { toast.error(e.message || '保存失败') }
 }
 
-async function testEmail() {
+async function testEmailAction() {
   try {
-    await settingsApi.testEmail()
+    await testEmailMutation.mutateAsync()
     toast.success('测试邮件已发送')
   } catch (e: any) { toast.error(e.message || '发送失败') }
 }
@@ -146,14 +169,12 @@ async function handleChangePassword() {
     return
   }
   try {
-    await settingsApi.changePassword(passwordForm.value as any)
+    await changePasswordMutation.mutateAsync(passwordForm.value as any)
     toast.success('密码已修改')
     passwordDialog.value = false
     passwordForm.value = { old_password: '', new_password: '', confirm_password: '' }
   } catch (e: any) { toast.error(e.message || '修改失败') }
 }
-
-onMounted(loadSettings)
 </script>
 
 <template>
@@ -258,7 +279,7 @@ onMounted(loadSettings)
                 <Label>邮箱地址</Label>
                 <div class="flex gap-2">
                   <Input v-model="notifications.email_address" placeholder="your@email.com" class="flex-1" />
-                  <Button variant="outline" @click="testEmail">测试</Button>
+                  <Button variant="outline" @click="testEmailAction">测试</Button>
                 </div>
               </div>
             </div>

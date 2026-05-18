@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted, h } from 'vue'
+import { ref, computed, h } from 'vue'
 import { toast } from 'vue-sonner'
 import { useRiskStore } from '@/stores/risk'
+import {
+  useRiskRules,
+  useRiskAlerts,
+  useUnreadAlertCount,
+  useCreateRule,
+  useUpdateRule,
+  useToggleRule,
+  useDeleteRule,
+} from '@/composables/useRiskQuery'
 import { formatDate } from '@/utils/format'
 import { BasicPage } from '@/components/global-layout'
 import { DataTable } from '@/components/data-table'
@@ -50,9 +59,18 @@ import {
 import { Plus } from 'lucide-vue-next'
 
 const store = useRiskStore()
-const loading = ref(false)
-const alertLoading = ref(false)
 const activeTab = ref('rules')
+
+const { data: rules, isLoading: rulesLoading } = useRiskRules()
+const { data: unreadCount } = useUnreadAlertCount()
+
+const alertParams = computed(() => ({ page: 1, page_size: 50 }))
+const { data: alertsData, isLoading: alertsLoading } = useRiskAlerts(alertParams)
+
+const createRuleMut = useCreateRule()
+const updateRuleMut = useUpdateRule()
+const toggleRuleMut = useToggleRule()
+const deleteRuleMut = useDeleteRule()
 
 const dialogOpen = ref(false)
 const editingRule = ref<any>(null)
@@ -128,18 +146,6 @@ const alertColumns: ColumnDef<any>[] = [
   { accessorKey: 'created_at', header: '时间', cell: ({ row }) => formatDate(row.getValue('created_at')) },
 ]
 
-async function loadRules() {
-  loading.value = true
-  try { await store.fetchRules() }
-  finally { loading.value = false }
-}
-
-async function loadAlerts() {
-  alertLoading.value = true
-  try { await store.fetchAlerts({ page: 1, page_size: 50 }) }
-  finally { alertLoading.value = false }
-}
-
 function openCreate() {
   editingRule.value = null
   ruleForm.value = { name: '', metric: '', condition: 'gt', threshold: '', level: 'medium', cooldown_minutes: 60 }
@@ -167,39 +173,30 @@ async function handleSaveRule() {
   try {
     const data = { ...ruleForm.value, threshold: Number(ruleForm.value.threshold) }
     if (editingRule.value) {
-      await store.updateRule(editingRule.value.id, data)
+      await updateRuleMut.mutateAsync({ id: editingRule.value.id, data: data as any })
       toast.success('规则已更新')
     } else {
-      await store.createRule(data as any)
+      await createRuleMut.mutateAsync(data as any)
       toast.success('规则已创建')
     }
     dialogOpen.value = false
-    await loadRules()
   } catch (e: any) { toast.error(e.message || '保存失败') }
 }
 
 async function handleToggle(rule: any) {
   try {
-    await store.toggleRule(rule.id)
-    await loadRules()
+    await toggleRuleMut.mutateAsync(rule.id)
   } catch (e: any) { toast.error(e.message || '操作失败') }
 }
 
 async function handleDelete() {
   if (!deleteTarget.value) return
   try {
-    await store.deleteRule(deleteTarget.value)
+    await deleteRuleMut.mutateAsync(deleteTarget.value)
     toast.success('规则已删除')
-    await loadRules()
   } catch (e: any) { toast.error(e.message || '删除失败') }
   finally { deleteTarget.value = null }
 }
-
-onMounted(() => {
-  loadRules()
-  loadAlerts()
-  store.fetchUnreadCount()
-})
 </script>
 
 <template>
@@ -216,18 +213,18 @@ onMounted(() => {
         <UiTabsTrigger value="rules">风控规则</UiTabsTrigger>
         <UiTabsTrigger value="alerts">
           告警记录
-          <span v-if="store.unreadCount > 0" class="ml-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px]">
-            {{ store.unreadCount > 99 ? '99+' : store.unreadCount }}
+          <span v-if="(unreadCount ?? 0) > 0" class="ml-1.5 flex size-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px]">
+            {{ (unreadCount ?? 0) > 99 ? '99+' : unreadCount }}
           </span>
         </UiTabsTrigger>
       </UiTabsList>
 
       <UiTabsContent value="rules" class="mt-4">
-        <DataTable :columns="ruleColumns" :data="store.rules" :total="store.rules.length" :page-size="50" :loading="loading" />
+        <DataTable :columns="ruleColumns" :data="rules ?? []" :total="(rules ?? []).length" :page-size="50" :loading="rulesLoading" />
       </UiTabsContent>
 
       <UiTabsContent value="alerts" class="mt-4">
-        <DataTable :columns="alertColumns" :data="store.alerts" :total="store.alertTotal" :page-size="50" :loading="alertLoading" />
+        <DataTable :columns="alertColumns" :data="alertsData?.items ?? []" :total="alertsData?.total ?? 0" :page-size="50" :loading="alertsLoading" />
       </UiTabsContent>
     </UiTabs>
 

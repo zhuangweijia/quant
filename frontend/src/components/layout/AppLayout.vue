@@ -13,6 +13,11 @@ import {
 const { isDark, toggleTheme } = useTheme()
 const riskStore = useRiskStore()
 const showNotifications = ref(false)
+const commandMenuRef = ref<InstanceType<typeof CommandMenu> | null>(null)
+
+function openCommandMenu() {
+  commandMenuRef.value?.setOpen(true)
+}
 
 async function toggleNotifications() {
   showNotifications.value = !showNotifications.value
@@ -29,7 +34,7 @@ async function toggleNotifications() {
       <header class="flex h-14 items-center gap-3 border-b px-4 shrink-0">
         <UiSidebarTrigger class="-ml-1" />
         <UiSeparator orientation="vertical" class="h-6" />
-        <Button variant="outline" size="sm" class="ml-2 gap-2 text-muted-foreground" @click="() => {}">
+        <Button variant="outline" size="sm" class="ml-2 gap-2 text-muted-foreground" @click="openCommandMenu">
           <Search class="size-4" />
           <span class="hidden sm:inline">搜索...</span>
           <kbd class="pointer-events-none hidden sm:inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
@@ -103,10 +108,12 @@ async function toggleNotifications() {
 
       <main class="flex-1 p-6 overflow-auto">
         <router-view v-slot="{ Component, route }">
-          <component :is="Component" :key="route.path" />
+          <transition name="page" mode="out-in">
+            <component :is="Component" :key="route.path" />
+          </transition>
         </router-view>
       </main>
     </UiSidebarInset>
-    <CommandMenu />
+    <CommandMenu ref="commandMenuRef" />
   </UiSidebarProvider>
 </template>
