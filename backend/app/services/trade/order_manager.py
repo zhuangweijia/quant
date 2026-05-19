@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.order import Order
 from app.models.position import Position
 from app.services.trade.base import get_paper_broker
+from app.services.trade.broker_factory import get_broker_for_user
 from app.core.events import event_bus
 import structlog
 
@@ -64,7 +65,7 @@ async def submit_order(
             pos.frozen_qty += payload["qty"]
             await db.flush()
 
-    broker = get_paper_broker()
+    broker = await get_broker_for_user(db, user_id, payload.get("market", ""))
     try:
         result = await broker.submit_order(
             symbol=order.symbol,
@@ -120,7 +121,7 @@ async def cancel_order(db: AsyncSession, user_id: str, order_id: str) -> Order:
         raise ValueError(f"订单状态为 {order.status}，无法撤单")
 
     if order.broker_order_id:
-        broker = get_paper_broker()
+        broker = await get_broker_for_user(db, user_id, order.market or "")
         await broker.cancel_order(order.broker_order_id)
 
     if order.side == "sell" and order.strategy_id:
@@ -165,7 +166,7 @@ async def close_position(db: AsyncSession, user_id: str, position_id: str) -> Or
     db.add(order)
     await db.flush()
 
-    broker = get_paper_broker()
+    broker = await get_broker_for_user(db, user_id, position.market or "")
     result = await broker.submit_order(
         symbol=order.symbol, side="sell", order_type="market",
         qty=order.qty, price=None,

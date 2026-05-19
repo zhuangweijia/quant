@@ -33,7 +33,7 @@ dev = [
 ]
 akshare = ["akshare>=1.12"]
 alpaca = ["alpaca-py>=0.20"]
-binance = ["python-binance>=1.0"]
+binance = ["ccxt>=4.0"]
 talib = ["TA-Lib>=0.4.28"]
 all-market = ["quantplatform[akshare,alpaca,binance,talib]"]
 

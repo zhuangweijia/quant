@@ -48,13 +48,23 @@ async def get_brokers(user: CurrentUser, db: DBSession):
     binance_config = await get_settings_category(db, user.id, "broker:binance")
     alpaca_config = await get_settings_category(db, user.id, "broker:alpaca")
 
+    import json
+    binance_extra = binance_config.get("extra_params", "{}")
+    try:
+        binance_params = json.loads(binance_extra) if isinstance(binance_extra, str) else binance_extra
+    except (json.JSONDecodeError, TypeError):
+        binance_params = {}
+
     brokers = [
         {
             "broker_name": "binance",
             "market": "crypto",
             "api_key": binance_config.get("api_key", ""),
             "has_secret": bool(binance_config.get("api_secret")),
-            "params": {"network": binance_config.get("network", "mainnet")},
+            "params": {
+                "testnet": binance_params.get("testnet", False),
+                "network": binance_params.get("network", "mainnet"),
+            },
             "connected": False,
         },
         {
@@ -94,12 +104,20 @@ async def save_broker_config(
         import json
         await set_setting(db, user.id, category, "extra_params", json.dumps(payload.params))
 
+    from app.services.trade.broker_factory import invalidate_broker_cache
+    invalidate_broker_cache(user.id, broker_name)
+
     return ResponseBase(data={"broker_name": broker_name, "saved": True})
 
 
 @router.post("/brokers/{broker_name}/test", response_model=ResponseBase[dict])
 async def test_broker_connection(user: CurrentUser, db: DBSession, broker_name: str):
-    return ResponseBase(data={"connected": broker_name == "akshare"})
+    if broker_name not in ("binance", "alpaca", "akshare"):
+        raise HTTPException(status_code=400, detail="不支持的交易所")
+
+    from app.services.trade.broker_factory import test_broker_connection as do_test
+    result = await do_test(db, user.id, broker_name)
+    return ResponseBase(data=result)
 
 
 @router.get("/trading-mode", response_model=ResponseBase[dict])

@@ -103,7 +103,7 @@ watch(profileData, (d: any) => {
 watch(brokersData, (d: any) => {
   if (Array.isArray(d) && d.length) {
     brokerName.value = d[0].broker_name || 'default'
-    broker.value = { api_key: d[0].api_key || '', api_secret: d[0].api_secret || '', testnet: d[0].testnet || false }
+    broker.value = { api_key: d[0].api_key || '', api_secret: d[0].api_secret || '', testnet: d[0].params?.testnet || false }
   }
 })
 
@@ -126,7 +126,14 @@ watch(notificationsData, (d: any) => {
 
 async function saveBroker() {
   try {
-    await updateBroker.mutateAsync({ brokerName: brokerName.value, data: broker.value })
+    await updateBroker.mutateAsync({
+      brokerName: brokerName.value,
+      data: {
+        api_key: broker.value.api_key,
+        api_secret: broker.value.api_secret,
+        params: { testnet: broker.value.testnet },
+      },
+    })
     toast.success('券商配置已保存')
   } catch (e: any) { toast.error(e.message || '保存失败') }
 }
