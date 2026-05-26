@@ -1,4 +1,6 @@
-from sqlalchemy import String, ForeignKey, Boolean, Integer
+import uuid
+
+from sqlalchemy import String, ForeignKey, Boolean, Integer, Uuid as UuidType
 from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -8,11 +10,11 @@ from app.models.base import Base, UUIDMixin, TimestampMixin
 class RiskRule(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "risk_rules"
 
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    strategy_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=True
+    strategy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=True
     )
     rule_type: Mapped[str] = mapped_column(String(32), nullable=False)
     params: Mapped[dict] = mapped_column(JSON, nullable=False)

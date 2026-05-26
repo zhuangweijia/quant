@@ -1,4 +1,6 @@
-from sqlalchemy import String, Text, ForeignKey, Boolean, UniqueConstraint
+import uuid
+
+from sqlalchemy import String, Text, ForeignKey, Boolean, UniqueConstraint, Uuid as UuidType
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -10,8 +12,8 @@ class Setting(UUIDMixin, TimestampMixin, Base):
         UniqueConstraint("user_id", "category", "key", name="uq_settings_user_cat_key"),
     )
 
-    user_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
     )
     category: Mapped[str] = mapped_column(String(32), nullable=False)
     key: Mapped[str] = mapped_column(String(64), nullable=False)

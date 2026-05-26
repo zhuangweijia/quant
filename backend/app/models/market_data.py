@@ -1,7 +1,8 @@
+import uuid
 from decimal import Decimal
 from datetime import date, datetime
 
-from sqlalchemy import String, Numeric, BigInteger, Index, UniqueConstraint, Date, Integer, DateTime, ForeignKey
+from sqlalchemy import String, Numeric, BigInteger, Index, UniqueConstraint, Date, Integer, DateTime, ForeignKey, Uuid as UuidType
 from sqlalchemy import JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,11 +45,11 @@ class MarketData(TimestampMixin, Base):
 class BacktestResult(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "backtest_results"
 
-    strategy_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False
+    strategy_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("strategies.id", ondelete="CASCADE"), nullable=False
     )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)

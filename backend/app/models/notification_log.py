@@ -1,4 +1,6 @@
-from sqlalchemy import String, Text, ForeignKey, Index
+import uuid
+
+from sqlalchemy import String, Text, ForeignKey, Index, Uuid as UuidType
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -10,8 +12,8 @@ class NotificationLog(UUIDMixin, TimestampMixin, Base):
         Index("ix_notification_logs_user_created", "user_id", "created_at"),
     )
 
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     channel: Mapped[str] = mapped_column(String(16), nullable=False)
     event_type: Mapped[str] = mapped_column(String(32), nullable=False)

@@ -1,4 +1,6 @@
-from sqlalchemy import String, ForeignKey, Integer, UniqueConstraint
+import uuid
+
+from sqlalchemy import String, ForeignKey, Integer, UniqueConstraint, Uuid as UuidType
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -10,8 +12,8 @@ class UserWatchlist(UUIDMixin, TimestampMixin, Base):
         UniqueConstraint("user_id", "symbol", "market", name="uq_watchlist_user_symbol"),
     )
 
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     market: Mapped[str] = mapped_column(String(16), nullable=False)

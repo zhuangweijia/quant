@@ -1,6 +1,7 @@
+import uuid
 from decimal import Decimal
 
-from sqlalchemy import String, ForeignKey, Numeric, Index
+from sqlalchemy import String, ForeignKey, Numeric, Index, Uuid as UuidType
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -13,11 +14,11 @@ class Order(UUIDMixin, TimestampMixin, Base):
         Index("ix_orders_symbol", "symbol"),
     )
 
-    strategy_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
+    strategy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
     )
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     market: Mapped[str] = mapped_column(String(16), nullable=False)

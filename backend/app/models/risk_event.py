@@ -1,4 +1,6 @@
-from sqlalchemy import String, Text, ForeignKey, Index, JSON
+import uuid
+
+from sqlalchemy import String, Text, ForeignKey, Index, JSON, Uuid as UuidType
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -10,17 +12,17 @@ class RiskEvent(UUIDMixin, TimestampMixin, Base):
         Index("ix_risk_events_user_created", "user_id", "created_at"),
     )
 
-    user_id: Mapped[str] = mapped_column(
-        String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    strategy_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
+    strategy_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True
     )
-    rule_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("risk_rules.id", ondelete="SET NULL"), nullable=True
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("risk_rules.id", ondelete="SET NULL"), nullable=True
     )
-    order_id: Mapped[str | None] = mapped_column(
-        String(36), ForeignKey("orders.id", ondelete="SET NULL"), nullable=True
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UuidType(as_uuid=True), ForeignKey("orders.id", ondelete="SET NULL"), nullable=True
     )
     rule_type: Mapped[str] = mapped_column(String(32), nullable=False)
     result: Mapped[str] = mapped_column(String(16), nullable=False)
