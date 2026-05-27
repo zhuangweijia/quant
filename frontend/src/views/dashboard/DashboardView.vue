@@ -52,8 +52,14 @@ const strategyRanking = computed(() => strategyRankingQuery.data.value || [])
 const recentOrders = computed(() => (ordersQuery.data.value as any)?.items || [])
 const unreadCount = computed(() => alertCountQuery.data.value ?? 0)
 
+const primaryColor = computed(() => {
+  const style = getComputedStyle(document.documentElement)
+  return style.getPropertyValue('--primary').trim() || '#3b82f6'
+})
+
 const equityOption = computed(() => {
   const points = equityCurveQuery.data.value || []
+  const color = primaryColor.value
   return {
     tooltip: { trigger: 'axis' },
     grid: { left: 80, right: 30, top: 30, bottom: 40 },
@@ -66,11 +72,11 @@ const equityOption = computed(() => {
         type: 'line',
         data: points.map((p: any) => p.equity),
         smooth: true,
-        lineStyle: { width: 2, color: '#3b82f6' },
+        lineStyle: { width: 2, color },
         areaStyle: {
           color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [
-            { offset: 0, color: 'rgba(59,130,246,0.3)' },
-            { offset: 1, color: 'rgba(59,130,246,0.02)' },
+            { offset: 0, color: color + '4d' },
+            { offset: 1, color: color + '05' },
           ] },
         },
       },
@@ -89,7 +95,11 @@ const positionOption = computed(() => {
     series: [{
       type: 'pie', radius: ['40%', '70%'],
       data: posData.length ? posData : [{ name: '暂无持仓', value: 1 }],
-      label: { fontSize: 12 },
+      emphasis: {
+        itemStyle: { shadowBlur: 10, shadowColor: 'rgba(0,0,0,0.15)' },
+      },
+      label: { show: posData.length > 0, fontSize: 12 },
+      silent: !posData.length,
     }],
   }
 })

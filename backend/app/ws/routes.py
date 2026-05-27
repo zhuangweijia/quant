@@ -40,11 +40,23 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
                 if action == "ping":
                     await websocket.send_text(json.dumps({"action": "pong"}))
                 elif action == "subscribe":
-                    await websocket.send_text(json.dumps({
-                        "type": "system",
-                        "data": {"message": "subscribed"},
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    }))
+                    channels = msg.get("channels", [])
+                    if isinstance(channels, list):
+                        await ws_manager.subscribe(websocket, user_id, channels)
+                        await websocket.send_text(json.dumps({
+                            "type": "system",
+                            "data": {"message": "subscribed", "channels": channels},
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }))
+                elif action == "unsubscribe":
+                    channels = msg.get("channels", [])
+                    if isinstance(channels, list):
+                        await ws_manager.unsubscribe(websocket, user_id, channels)
+                        await websocket.send_text(json.dumps({
+                            "type": "system",
+                            "data": {"message": "unsubscribed", "channels": channels},
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }))
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:

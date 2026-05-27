@@ -1,6 +1,7 @@
 import asyncio
 import math
-from datetime import datetime, timezone
+import uuid as _uuid
+from datetime import datetime, timezone, date
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -55,6 +56,7 @@ class BacktestContext:
         self.equity_curve: list[dict] = []
         self.trades: list[dict] = []
         self.current_price: float = 0
+        self.logs: list[dict] = []
 
     def send_order(self, symbol: str, side: OrderSide, order_type: OrderType,
                    qty: float, price: float | None = None) -> str:
@@ -124,16 +126,27 @@ class BacktestContext:
         return self.bars_cache.get(symbol, [])[-length:]
 
     def log(self, message: str):
-        pass
+        self.logs.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": message,
+        })
 
 
 async def run_backtest(db: AsyncSession, user_id: str, payload: dict) -> BacktestResult:
+    uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+    start_date = payload["start_date"]
+    end_date = payload["end_date"]
+    if isinstance(start_date, str):
+        start_date = date.fromisoformat(start_date)
+    if isinstance(end_date, str):
+        end_date = date.fromisoformat(end_date)
+
     result = BacktestResult(
-        user_id=user_id,
+        user_id=uid,
         strategy_id=payload["strategy_id"],
         symbol=payload["symbol"],
-        start_date=payload["start_date"],
-        end_date=payload["end_date"],
+        start_date=start_date,
+        end_date=end_date,
         timeframe=payload["timeframe"],
         initial_capital=payload["initial_capital"],
         params=payload.get("params"),
@@ -223,7 +236,14 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
 
             try:
                 ctx.current_price = close
+                prev_trade_count = len(ctx.trades)
                 strategy_instance.on_bar(bar_data)
+                new_trades = ctx.trades[prev_trade_count:]
+                for t in new_trades:
+                    if t.get("entry_time") is None:
+                        t["entry_time"] = i
+                    else:
+                        t["exit_time"] = i
             except Exception as e:
                 logger.warning("backtest.on_bar_error", error=str(e))
 
@@ -272,33 +292,32 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
 
         completed_trades = [t for t in ctx.trades if t.get("exit_price") is not None]
         win_trades = [t for t in completed_trades if (t.get("pnl") or 0) > 0]
+
+        first_price = float(klines[0]["close"]) if klines else 0
+        last_price = float(klines[-1]["close"]) if klines else 0
+        benchmark_return = ((last_price - first_price) / first_price) if first_price > 0 else 0
+
+        benchmark_equity = []
+        if klines and first_price > 0:
+            for bar in klines:
+                price = float(bar["close"])
+                equity = initial * (price / first_price)
+                benchmark_equity.append({
+                    "timestamp": bar["timestamp"],
+                    "equity": round(equity, 2),
+                })
         win_rate = len(win_trades) / len(completed_trades) if completed_trades else 0
 
         total_profit = sum(t["pnl"] for t in win_trades) if win_trades else 0
         total_loss = abs(sum(t["pnl"] for t in [t for t in completed_trades if (t.get("pnl") or 0) < 0]))
         profit_factor = total_profit / total_loss if total_loss > 0 else 0
 
-        monthly_returns = {}
-        for i in range(1, len(equity_values)):
-            ts = ctx.equity_curve[i]["timestamp"][:7]
-            prev_eq = equity_values[i - 1]
-            if prev_eq > 0:
-                mr = (equity_values[i] - prev_eq) / prev_eq
-                monthly_returns.setdefault(ts, []).append(mr)
-        monthly_summary = {k: round(sum(v), 4) for k, v in monthly_returns.items()}
-
-        down_returns = [r for r in returns if r < 0] if returns else []
-        sortino = 0.0
-        if down_returns:
-            down_std = math.sqrt(sum(r ** 2 for r in down_returns) / len(down_returns))
-            if down_std > 0 and returns:
-                sortino = (sum(returns) / len(returns)) / down_std * math.sqrt(252)
-
-        calmar = annual_return / max_dd if max_dd > 0 else 0
-
         total_holding_bars = 0
         for t in completed_trades:
-            total_holding_bars += 1
+            if t.get("entry_time") is not None and t.get("exit_time") is not None:
+                total_holding_bars += max(t["exit_time"] - t["entry_time"], 1)
+            else:
+                total_holding_bars += 1
         avg_holding = (total_holding_bars / len(completed_trades)) if completed_trades else 0
 
         async with AsyncSessionLocal() as db:
@@ -319,6 +338,8 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
                 r.drawdown_curve = {"data": drawdown_curve}
                 r.trades = {"data": ctx.trades}
                 r.monthly_returns = monthly_summary
+                r.benchmark_return = round(Decimal(str(benchmark_return * 100)), 4)
+                r.equity_curve["benchmark"] = benchmark_equity
                 await db.commit()
 
     except Exception as e:
@@ -337,24 +358,30 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
 async def list_backtest_results(
     db: AsyncSession, user_id: str, strategy_id: str | None = None
 ) -> list[BacktestResult]:
-    query = select(BacktestResult).where(BacktestResult.user_id == user_id)
+    uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+    query = select(BacktestResult).where(BacktestResult.user_id == uid)
     if strategy_id:
-        query = query.where(BacktestResult.strategy_id == strategy_id)
+        sid = _uuid.UUID(strategy_id)
+        query = query.where(BacktestResult.strategy_id == sid)
     query = query.order_by(BacktestResult.created_at.desc())
     result = await db.execute(query)
     return result.scalars().all()
 
 
 async def get_backtest_result(db: AsyncSession, user_id: str, result_id: str) -> BacktestResult | None:
-    result = await db.get(BacktestResult, result_id)
-    if result and result.user_id != user_id:
+    uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+    rid = _uuid.UUID(result_id)
+    result = await db.get(BacktestResult, rid)
+    if result and result.user_id != uid:
         return None
     return result
 
 
 async def delete_backtest_result(db: AsyncSession, user_id: str, result_id: str) -> bool:
-    result = await db.get(BacktestResult, result_id)
-    if not result or result.user_id != user_id:
+    uid = _uuid.UUID(user_id) if isinstance(user_id, str) else user_id
+    rid = _uuid.UUID(result_id)
+    result = await db.get(BacktestResult, rid)
+    if not result or result.user_id != uid:
         return False
     await db.delete(result)
     await db.flush()

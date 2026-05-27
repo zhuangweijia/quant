@@ -20,6 +20,9 @@ import {
   CardContent as UiCardContent,
 } from '@/components/ui/card'
 import { ArrowLeft } from 'lucide-vue-next'
+import { Codemirror } from 'vue-codemirror'
+import { python } from '@codemirror/lang-python'
+import { oneDark } from '@codemirror/theme-one-dark'
 
 const route = useRoute()
 const router = useRouter()
@@ -40,12 +43,21 @@ class MyStrategy(BaseStrategy):
         bars = self.get_bars(bar.symbol, self.long_period + 1)
         if len(bars) < self.long_period:
             return
+        short_avg = sum(b.close for b in bars[-self.short_period:]) / self.short_period
+        long_avg = sum(b.close for b in bars[-self.long_period:]) / self.long_period
+
+        if short_avg > long_avg and self.get_position(bar.symbol) <= 0:
+            self.buy(bar.symbol, qty=1.0)
+        elif short_avg < long_avg and self.get_position(bar.symbol) > 0:
+            self.sell(bar.symbol, qty=self.get_position(bar.symbol))
 `,
   params: '{"short_period": 5, "long_period": 20}',
   market: 'crypto',
+  symbol: '',
+  timeframe: '1d',
 })
 
-const codeLines = computed(() => form.value.code.split('\n').length)
+const cmExtensions = [python(), oneDark]
 
 onMounted(async () => {
   if (isEdit.value) {
@@ -59,6 +71,8 @@ onMounted(async () => {
         code: s.code,
         params: s.params ? JSON.stringify(s.params, null, 2) : '{}',
         market: s.market,
+        symbol: s.symbol || '',
+        timeframe: s.timeframe || '1d',
       }
     } catch {
       toast.error('策略加载失败')
@@ -77,13 +91,15 @@ async function handleSave() {
     try { params = JSON.parse(form.value.params || '{}') }
     catch { toast.error('策略参数 JSON 格式错误'); loading.value = false; return }
 
-    const data = {
+    const data: any = {
       name: form.value.name,
       description: form.value.description || undefined,
       code: form.value.code,
       params,
       market: form.value.market,
     }
+    if (form.value.symbol) data.symbol = form.value.symbol
+    if (form.value.timeframe) data.timeframe = form.value.timeframe
 
     if (isEdit.value) {
       await strategyApi.update(route.params.id as string, data)
@@ -129,6 +145,31 @@ async function handleSave() {
           </div>
         </div>
 
+        <div class="grid gap-6 sm:grid-cols-2">
+          <div class="space-y-2">
+            <Label for="symbol">交易标的 (Symbol)</Label>
+            <Input id="symbol" v-model="form.symbol" placeholder="如 BTCUSDT / AAPL / 000001" />
+          </div>
+          <div class="space-y-2">
+            <Label>时间周期</Label>
+            <UiSelect v-model="form.timeframe">
+              <UiSelectTrigger>
+                <UiSelectValue placeholder="选择周期" />
+              </UiSelectTrigger>
+              <UiSelectContent>
+                <UiSelectItem value="1m">1 分钟</UiSelectItem>
+                <UiSelectItem value="5m">5 分钟</UiSelectItem>
+                <UiSelectItem value="15m">15 分钟</UiSelectItem>
+                <UiSelectItem value="30m">30 分钟</UiSelectItem>
+                <UiSelectItem value="1h">1 小时</UiSelectItem>
+                <UiSelectItem value="4h">4 小时</UiSelectItem>
+                <UiSelectItem value="1d">1 天</UiSelectItem>
+                <UiSelectItem value="1w">1 周</UiSelectItem>
+              </UiSelectContent>
+            </UiSelect>
+          </div>
+        </div>
+
         <div class="space-y-2">
           <Label for="description">描述</Label>
           <textarea
@@ -142,14 +183,11 @@ async function handleSave() {
 
         <div class="space-y-2">
           <Label>策略代码</Label>
-          <div class="flex rounded-md border overflow-hidden bg-muted/50 font-mono text-sm">
-            <div class="shrink-0 w-12 bg-muted border-r py-3 select-none text-right text-muted-foreground text-xs leading-relaxed">
-              <div v-for="n in codeLines" :key="n" class="px-2 leading-relaxed">{{ n }}</div>
-            </div>
-            <textarea
+          <div class="border rounded-md overflow-hidden">
+            <Codemirror
               v-model="form.code"
-              class="flex-1 min-h-[400px] p-3 bg-transparent border-0 outline-none resize-y font-mono text-sm leading-relaxed tab-size-4"
-              spellcheck="false"
+              :extensions="cmExtensions"
+              :style="{ height: '400px' }"
             />
           </div>
         </div>

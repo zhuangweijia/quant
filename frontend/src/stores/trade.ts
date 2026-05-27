@@ -10,16 +10,19 @@ export const useTradeStore = defineStore("trade", () => {
   const ordersTotal = ref(0);
   const account = ref<AccountInfo | null>(null);
 
-  wsClient.on("trade:order", () => {
+  const onTradeOrder = () => {
     fetchOrders();
     fetchPositions();
     fetchAccount();
-  });
+  };
 
-  wsClient.on("trade:position", () => {
+  const onTradePosition = () => {
     fetchPositions();
     fetchAccount();
-  });
+  };
+
+  wsClient.on("trade:order", onTradeOrder);
+  wsClient.on("trade:position", onTradePosition);
 
   async function fetchPositions() {
     const res: any = await tradeApi.getPositions();
@@ -61,5 +64,9 @@ export const useTradeStore = defineStore("trade", () => {
     cancelOrder,
     closePosition,
     fetchAccount,
+    $dispose() {
+      wsClient.off("trade:order", onTradeOrder);
+      wsClient.off("trade:position", onTradePosition);
+    },
   };
 });

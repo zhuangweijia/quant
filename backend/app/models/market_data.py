@@ -1,9 +1,9 @@
 import uuid
-from decimal import Decimal
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import String, Numeric, BigInteger, Index, UniqueConstraint, Date, Integer, DateTime, ForeignKey, Uuid as UuidType
-from sqlalchemy import JSON
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -39,7 +39,7 @@ class MarketData(TimestampMixin, Base):
     low: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     close: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
     volume: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)
-    timestamp: Mapped[str] = mapped_column(String(64), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class BacktestResult(UUIDMixin, TimestampMixin, Base):
@@ -51,10 +51,10 @@ class BacktestResult(UUIDMixin, TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    params: Mapped[dict | None] = mapped_column(postgresql.JSONB, nullable=True)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
-    start_date: Mapped[str] = mapped_column(String(32), nullable=False)
-    end_date: Mapped[str] = mapped_column(String(32), nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
     timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
     initial_capital: Mapped[Decimal] = mapped_column(
         Numeric(20, 8), nullable=False
@@ -87,15 +87,18 @@ class BacktestResult(UUIDMixin, TimestampMixin, Base):
     avg_holding_period: Mapped[Decimal | None] = mapped_column(
         Numeric(10, 2), nullable=True
     )
-    equity_curve: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    drawdown_curve: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    trades: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    monthly_returns: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    equity_curve: Mapped[dict | None] = mapped_column(postgresql.JSONB, nullable=True)
+    drawdown_curve: Mapped[dict | None] = mapped_column(postgresql.JSONB, nullable=True)
+    trades: Mapped[dict | None] = mapped_column(postgresql.JSONB, nullable=True)
+    monthly_returns: Mapped[dict | None] = mapped_column(postgresql.JSONB, nullable=True)
     status: Mapped[str] = mapped_column(
         String(16), default="running", nullable=False
     )
     error_message: Mapped[str | None] = mapped_column(
         String(1024), nullable=True
+    )
+    benchmark_return: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 4), nullable=True
     )
 
     strategy = relationship("Strategy", back_populates="backtest_results")

@@ -7,10 +7,13 @@ import {
   useBrokers,
   useTradingMode,
   useNotifications,
+  useParams,
   useUpdateBroker,
   useTestBroker,
   useUpdateTradingMode,
   useUpdateNotifications,
+  useUpdateParams,
+  useResetParams,
   useTestEmail,
   useChangePassword,
 } from '@/composables/useSettingsQuery'
@@ -60,6 +63,10 @@ const { data: profileData, isLoading: profileLoading } = useProfile()
 const { data: brokersData, isLoading: brokersLoading } = useBrokers()
 const { data: tradingModeData, isLoading: tradingModeLoading } = useTradingMode()
 const { data: notificationsData, isLoading: notificationsLoading } = useNotifications()
+const { data: paramsData, isLoading: paramsLoading } = useParams()
+const paramsQuery = useParams()
+const updateParamsMut = useUpdateParams()
+const resetParamsMut = useResetParams()
 
 const updateBroker = useUpdateBroker()
 const testBrokerMutation = useTestBroker()
@@ -71,6 +78,14 @@ const changePasswordMutation = useChangePassword()
 const loading = computed(() =>
   profileLoading.value || brokersLoading.value || tradingModeLoading.value || notificationsLoading.value,
 )
+
+const systemParams = ref<Record<string, string>>({})
+
+watch(paramsData, (d: any) => {
+  if (d) {
+    systemParams.value = { ...d }
+  }
+})
 const activeTab = ref('profile')
 
 const profile = ref({ username: '', email: '' })
@@ -182,6 +197,22 @@ async function handleChangePassword() {
     passwordForm.value = { old_password: '', new_password: '', confirm_password: '' }
   } catch (e: any) { toast.error(e.message || '修改失败') }
 }
+
+async function saveSystemParams() {
+  try {
+    await updateParamsMut.mutateAsync(systemParams.value as any)
+    toast.success('系统参数已保存')
+    paramsQuery.refetch()
+  } catch (e: any) { toast.error(e.message || '保存失败') }
+}
+
+async function resetSystemParams() {
+  try {
+    await resetParamsMut.mutateAsync()
+    toast.success('系统参数已重置')
+    paramsQuery.refetch()
+  } catch (e: any) { toast.error(e.message || '重置失败') }
+}
 </script>
 
 <template>
@@ -192,6 +223,7 @@ async function handleChangePassword() {
         <UiTabsTrigger value="broker">券商</UiTabsTrigger>
         <UiTabsTrigger value="notifications">通知</UiTabsTrigger>
         <UiTabsTrigger value="appearance">外观</UiTabsTrigger>
+        <UiTabsTrigger value="system">系统</UiTabsTrigger>
       </UiTabsList>
 
       <UiTabsContent value="profile" class="mt-6 space-y-6">
@@ -347,6 +379,30 @@ async function handleChangePassword() {
                   {{ color.label }}
                 </Button>
               </div>
+            </div>
+          </UiCardContent>
+        </UiCard>
+      </UiTabsContent>
+
+      <UiTabsContent value="system" class="mt-6 space-y-6">
+        <UiCard>
+          <UiCardHeader>
+            <UiCardTitle>系统参数</UiCardTitle>
+            <UiCardDescription>全局系统配置（需要管理员权限）</UiCardDescription>
+          </UiCardHeader>
+          <UiCardContent class="space-y-4">
+            <div class="grid gap-4 sm:grid-cols-2">
+              <div v-for="(value, key) in systemParams" :key="key" class="space-y-2">
+                <Label>{{ key }}</Label>
+                <Input v-model="systemParams[key]" :placeholder="`${key}`" />
+              </div>
+            </div>
+            <div v-if="!Object.keys(systemParams).length" class="text-sm text-muted-foreground">
+              暂无系统参数
+            </div>
+            <div class="flex gap-3">
+              <Button @click="saveSystemParams">保存参数</Button>
+              <Button variant="outline" @click="resetSystemParams">恢复默认</Button>
             </div>
           </UiCardContent>
         </UiCard>

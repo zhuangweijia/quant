@@ -109,6 +109,31 @@ class StopLossEvaluator(RiskRuleEvaluator):
         self.trail_percent = float(params.get("trail_percent", 0))
 
     async def evaluate(self, order, context):
+        if order["side"] != "sell":
+            return True, ""
+        symbol = order["symbol"]
+        current_price = context.get("current_price", 0)
+        if not current_price:
+            return True, ""
+
+        if self.stop_type == "fixed":
+            if current_price <= self.stop_value:
+                return False, f"已触发止损: 当前价 {current_price} <= {self.stop_value}"
+
+        elif self.stop_type == "percent":
+            pos_avg_price = context.get("position_avg_prices", {}).get(symbol, 0)
+            if pos_avg_price > 0:
+                drop = (pos_avg_price - current_price) / pos_avg_price * 100
+                if drop >= self.stop_value:
+                    return False, f"已触发百分比止损: 跌幅 {drop:.2f}%"
+
+        elif self.stop_type == "trailing":
+            peak = context.get("position_peaks", {}).get(symbol, 0)
+            if peak > 0:
+                drawdown = (peak - current_price) / peak * 100
+                if drawdown >= self.trail_percent:
+                    return False, f"已触发移动止损: 回撤 {drawdown:.2f}%"
+
         return True, ""
 
 
@@ -118,6 +143,24 @@ class TakeProfitEvaluator(RiskRuleEvaluator):
         self.take_value = float(params.get("value", 0))
 
     async def evaluate(self, order, context):
+        if order["side"] != "sell":
+            return True, ""
+        current_price = context.get("current_price", 0)
+        if not current_price:
+            return True, ""
+
+        if self.take_type == "fixed":
+            if current_price >= self.take_value:
+                return False, f"已触发止盈: 当前价 {current_price} >= {self.take_value}"
+
+        elif self.take_type == "percent":
+            symbol = order["symbol"]
+            pos_avg_price = context.get("position_avg_prices", {}).get(symbol, 0)
+            if pos_avg_price > 0:
+                gain = (current_price - pos_avg_price) / pos_avg_price * 100
+                if gain >= self.take_value:
+                    return False, f"已触发百分比止盈: 涨幅 {gain:.2f}%"
+
         return True, ""
 
 
@@ -143,10 +186,12 @@ async def build_context(db: AsyncSession, user_id: str, symbol: str, market: str
 
     total_position_value = Decimal("0")
     position_values = {}
+    position_avg_prices = {}
     position_markets: dict[str, str] = {}
     for pos in positions:
         provider = get_provider(pos.market)
         position_markets[pos.symbol] = pos.market
+        position_avg_prices[pos.symbol] = float(pos.avg_price)
         try:
             latest = await provider.get_latest_price(pos.symbol)
             price = Decimal(latest.get("price", "0"))
@@ -203,6 +248,8 @@ async def build_context(db: AsyncSession, user_id: str, symbol: str, market: str
         "cash": float(account.cash),
         "total_position_value": float(total_position_value),
         "position_values": position_values,
+        "position_avg_prices": position_avg_prices,
+        "position_peaks": position_values,
         "current_price": float(current_price),
         "daily_loss": float(daily_loss),
         "daily_trades": daily_trades_result or 0,

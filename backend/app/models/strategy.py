@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import String, Text, ForeignKey, DateTime, Uuid as UuidType
-from sqlalchemy import JSON
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, UUIDMixin, TimestampMixin
@@ -17,10 +17,12 @@ class Strategy(UUIDMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     code: Mapped[str] = mapped_column(Text, nullable=False)
-    params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    params: Mapped[dict | None] = mapped_column(postgresql.JSONB, nullable=True)
     market: Mapped[str] = mapped_column(String(16), nullable=False)
+    symbol: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    timeframe: Mapped[str | None] = mapped_column(String(8), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="draft", nullable=False)
-    deleted_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     user = relationship("User", back_populates="strategies")
     orders = relationship("Order", back_populates="strategy", lazy="selectin")

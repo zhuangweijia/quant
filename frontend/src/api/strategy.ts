@@ -34,3 +34,14 @@ export const strategyLogApi = {
   list: (strategyId: string, params?: Record<string, any>) =>
     client.get<ResponseBase<PageResponse<any>>>(`/api/v1/strategies/${strategyId}/logs`, { params }),
 };
+
+export const strategyVersionApi = {
+  list: (strategyId: string) =>
+    client.get<ResponseBase<any[]>>(`/api/v1/strategies/${strategyId}/versions`),
+
+  get: (strategyId: string, version: number) =>
+    client.get<ResponseBase<any>>(`/api/v1/strategies/${strategyId}/versions/${version}`),
+
+  rollback: (strategyId: string, targetVersion: number) =>
+    client.post<ResponseBase<any>>(`/api/v1/strategies/${strategyId}/rollback`, { target_version: targetVersion }),
+};

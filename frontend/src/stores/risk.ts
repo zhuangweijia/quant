@@ -10,9 +10,11 @@ export const useRiskStore = defineStore("risk", () => {
   const alertTotal = ref(0);
   const unreadCount = ref(0);
 
-  wsClient.on("risk:alert", () => {
+  const onRiskAlert = () => {
     fetchUnreadCount();
-  });
+  };
+
+  wsClient.on("risk:alert", onRiskAlert);
 
   async function fetchRules() {
     const res: any = await riskApi.getRules();
@@ -80,5 +82,8 @@ export const useRiskStore = defineStore("risk", () => {
     markAlertRead,
     markAllAlertsRead,
     fetchUnreadCount,
+    $dispose() {
+      wsClient.off("risk:alert", onRiskAlert);
+    },
   };
 });

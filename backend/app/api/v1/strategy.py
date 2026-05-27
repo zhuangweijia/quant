@@ -12,6 +12,7 @@ from app.schemas.strategy import (
     StrategyListItem,
     StrategyDetail,
 )
+from app.models.strategy_version import StrategyVersion
 
 router = APIRouter()
 
@@ -85,6 +86,8 @@ async def create_strategy(
         code=payload.code,
         params=payload.params,
         market=payload.market,
+        symbol=payload.symbol,
+        timeframe=payload.timeframe,
         status="draft",
     )
     db.add(strategy)
@@ -121,6 +124,20 @@ async def update_strategy(
     for key, value in update_data.items():
         setattr(strategy, key, value)
     strategy.status = "draft"
+
+    max_ver = await db.scalar(
+        select(func.max(StrategyVersion.version)).where(
+            StrategyVersion.strategy_id == strategy.id,
+        )
+    )
+    new_ver = (max_ver or 0) + 1
+    snapshot = StrategyVersion(
+        strategy_id=strategy.id,
+        version=new_ver,
+        code=strategy.code,
+        params=strategy.params,
+    )
+    db.add(snapshot)
     await db.flush()
     return ResponseBase(data=StrategyDetail.model_validate(strategy))
 
@@ -166,14 +183,19 @@ async def start_strategy(
 
     from app.services.strategy_engine import strategy_engine
     try:
-        default_symbol = "BTCUSDT" if strategy.market == "crypto" else "AAPL" if strategy.market == "us_stock" else "000001"
+        default_symbol = strategy.symbol or (
+            "BTCUSDT" if strategy.market == "crypto" else
+            "AAPL" if strategy.market == "us_stock" else
+            "000001"
+        )
+        tf = strategy.timeframe or "1d"
         await strategy_engine.start_strategy(
             strategy_id=str(strategy.id),
-            user_id=user.id,
+            user_id=str(user.id),
             code=strategy.code,
             params=strategy.params or {},
             market=strategy.market,
-            timeframe="1d",
+            timeframe=tf,
             symbol=default_symbol,
         )
     except Exception as e:

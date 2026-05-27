@@ -38,19 +38,18 @@ class StrategyContext:
             from app.database import AsyncSessionLocal
             from app.services.trade.order_manager import submit_order
             from app.services.risk_service import evaluate_risk
-            import asyncio
-
-            order_data = {
-                "symbol": symbol,
-                "market": "crypto",
-                "side": side.value,
-                "order_type": order_type.value,
-                "qty": Decimal(str(qty)),
-                "price": Decimal(str(price)) if price else None,
-                "strategy_id": self._strategy_id,
-            }
+            from sqlalchemy.util import greenlet_spawn
 
             async def _do():
+                order_data = {
+                    "symbol": symbol,
+                    "market": "crypto",
+                    "side": side.value,
+                    "order_type": order_type.value,
+                    "qty": Decimal(str(qty)),
+                    "price": Decimal(str(price)) if price else None,
+                    "strategy_id": self._strategy_id,
+                }
                 async with AsyncSessionLocal() as db:
                     passed, reason = await evaluate_risk(db, self._user_id, order_data)
                     if not passed:
@@ -64,16 +63,7 @@ class StrategyContext:
                         await self._engine._log(self._strategy_id, self._user_id, "ERROR", f"下单失败: {e}")
                         return ""
 
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    asyncio.ensure_future(_do())
-                else:
-                    loop.run_until_complete(_do())
-            except RuntimeError:
-                asyncio.run(_do())
-
-            return ""
+            return greenlet_spawn(_do)
         except Exception as e:
             logger.error("strategy.send_order_failed", error=str(e))
             return ""
@@ -82,6 +72,7 @@ class StrategyContext:
         try:
             from app.database import AsyncSessionLocal
             from app.models.position import Position
+            from sqlalchemy.util import greenlet_spawn
 
             async def _do():
                 async with AsyncSessionLocal() as db:
@@ -94,14 +85,7 @@ class StrategyContext:
                     pos = result.scalar_one_or_none()
                     return float(pos.qty) if pos else 0.0
 
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    return 0.0
-                else:
-                    return loop.run_until_complete(_do())
-            except RuntimeError:
-                return 0.0
+            return greenlet_spawn(_do)
         except Exception:
             return 0.0
 
@@ -177,6 +161,15 @@ class StrategyEngine:
             "BarData": BarData,
             "Decimal": Decimal,
         }
+
+        _safe_import = __builtins__.get("__import__") if isinstance(__builtins__, dict) else getattr(__builtins__, "__import__", None)
+
+        def _restricted_import(name, *args, **kwargs):
+            if name in BLOCKED_MODULES:
+                raise ImportError(f"Module '{name}' is blocked for security reasons")
+            return (_safe_import or __import__)(name, *args, **kwargs)
+
+        restricted_globals["__builtins__"] = restricted_globals | {"__import__": _restricted_import}
 
         exec_namespace = {}
         try:

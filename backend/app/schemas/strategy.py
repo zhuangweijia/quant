@@ -10,6 +10,8 @@ class StrategyCreate(BaseModel):
     code: str = Field(..., min_length=1)
     params: dict | None = None
     market: str = Field(..., pattern=r"^(a_stock|us_stock|crypto)$")
+    symbol: str | None = Field(None, max_length=32)
+    timeframe: str | None = Field(None, pattern=r"^(1m|5m|15m|30m|1h|4h|1d|1w)$")
 
 
 class StrategyUpdate(BaseModel):
@@ -17,6 +19,8 @@ class StrategyUpdate(BaseModel):
     description: str | None = None
     code: str | None = Field(None, min_length=1)
     params: dict | None = None
+    symbol: str | None = Field(None, max_length=32)
+    timeframe: str | None = Field(None, pattern=r"^(1m|5m|15m|30m|1h|4h|1d|1w)$")
 
 
 class StrategyListItem(BaseModel):
@@ -25,6 +29,8 @@ class StrategyListItem(BaseModel):
     market: str
     status: str
     description: str | None
+    symbol: str | None = None
+    timeframe: str | None = None
     created_at: datetime
     updated_at: datetime
 

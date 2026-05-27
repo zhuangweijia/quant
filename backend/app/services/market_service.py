@@ -253,6 +253,15 @@ def get_provider(market: str) -> MarketDataProvider:
             return provider
         except ImportError:
             logger.warning("akshare.not_installed")
+    if market == "crypto":
+        try:
+            import ccxt
+            from app.services.trade.brokers.binance_data import BinanceDataProvider
+            provider = BinanceDataProvider()
+            _providers[market] = provider
+            return provider
+        except ImportError:
+            logger.warning("ccxt.not_installed")
     provider = MockDataProvider()
     _providers[market] = provider
     return provider

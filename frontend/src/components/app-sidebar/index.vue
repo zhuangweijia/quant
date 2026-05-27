@@ -23,12 +23,16 @@ const riskStore = useRiskStore()
 const navItems = [
   { title: '看板', icon: Activity, path: '/dashboard' },
   { title: '行情', icon: CandlestickChart, path: '/market' },
-  { title: '策略', icon: Sparkles, path: '/strategy' },
-  { title: '回测', icon: FlaskConical, path: '/backtest' },
-  { title: '交易', icon: WalletCards, path: '/trade' },
-  { title: '风控', icon: ShieldAlert, path: '/risk' },
+  { title: '策略', icon: Sparkles, path: '/strategy', requireRole: 'trader' },
+  { title: '回测', icon: FlaskConical, path: '/backtest', requireRole: 'trader' },
+  { title: '交易', icon: WalletCards, path: '/trade', requireRole: 'trader' },
+  { title: '风控', icon: ShieldAlert, path: '/risk', requireRole: 'trader' },
   { title: '设置', icon: Settings2, path: '/settings' },
 ]
+
+const visibleNavItems = computed(() =>
+  navItems.filter(item => !item.requireRole || authStore.role !== 'viewer')
+)
 
 const isActive = (path: string) => route.path.startsWith(path)
 
@@ -63,7 +67,7 @@ function handleLogout() {
       <UiSidebarGroup>
         <UiSidebarGroupLabel>Workspace</UiSidebarGroupLabel>
         <UiSidebarMenu>
-          <UiSidebarMenuItem v-for="item in navItems" :key="item.path">
+          <UiSidebarMenuItem v-for="item in visibleNavItems" :key="item.path">
             <UiSidebarMenuButton
               as-child
               :is-active="isActive(item.path)"

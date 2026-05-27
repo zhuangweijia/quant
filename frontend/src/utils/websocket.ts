@@ -28,6 +28,7 @@ class WebSocketClient {
     this.ws.onopen = () => {
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+      this._dispatch("connection:open", {});
     };
 
     this.ws.onmessage = (event) => {
@@ -37,10 +38,8 @@ class WebSocketClient {
 
         const msgType = msg.type;
         if (msgType) {
-          const handlers = this.handlers.get(msgType) || [];
-          handlers.forEach((h) => h(msg.data));
-          const allHandlers = this.handlers.get("*") || [];
-          allHandlers.forEach((h) => h(msg));
+          this._dispatch(msgType, msg.data);
+          this._dispatch("*", msg);
         }
       } catch {
         // ignore parse errors
@@ -49,6 +48,7 @@ class WebSocketClient {
 
     this.ws.onclose = (event) => {
       this.stopHeartbeat();
+      this._dispatch("connection:close", {});
       if (event.code === 4001 || event.code === 1008) {
         this.reconnectAttempts = this.maxReconnectAttempts;
         return;
@@ -95,6 +95,13 @@ class WebSocketClient {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
     }
+  }
+
+  private _dispatch(type: string, data: any) {
+    const handlers = this.handlers.get(type) || [];
+    handlers.forEach((h) => h(data));
+    const allHandlers = this.handlers.get("*") || [];
+    allHandlers.forEach((h) => h({ type, data }));
   }
 
   private startHeartbeat() {

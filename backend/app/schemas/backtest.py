@@ -48,5 +48,6 @@ class BacktestResultDetail(BacktestResultListItem):
     trades: dict | None
     monthly_returns: dict | None
     error_message: str | None
+    benchmark_return: Decimal | None = None
 
     model_config = {"from_attributes": True}

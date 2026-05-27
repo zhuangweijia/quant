@@ -13,6 +13,7 @@ from app.models.strategy_log import StrategyLog
 from app.models.setting import Setting
 from app.models.risk_event import RiskEvent
 from app.models.notification_log import NotificationLog
+from app.models.strategy_version import StrategyVersion
 
 __all__ = [
     "Base",
@@ -31,4 +32,5 @@ __all__ = [
     "Setting",
     "RiskEvent",
     "NotificationLog",
+    "StrategyVersion",
 ]

@@ -20,8 +20,8 @@ async def api_run_backtest(user: CurrentUser, db: DBSession, payload: BacktestRu
         "symbol": payload.symbol,
         "market": payload.market,
         "timeframe": payload.timeframe,
-        "start_date": str(payload.start_date),
-        "end_date": str(payload.end_date),
+        "start_date": payload.start_date,
+        "end_date": payload.end_date,
         "initial_capital": payload.initial_capital,
         "commission_rate": payload.commission_rate,
         "slippage": payload.slippage,
@@ -44,8 +44,9 @@ async def api_list_results(
     data_query = select(BacktestResult).where(BacktestResult.user_id == user.id)
 
     if strategy_id:
-        count_query = count_query.where(BacktestResult.strategy_id == strategy_id)
-        data_query = data_query.where(BacktestResult.strategy_id == strategy_id)
+        sid = UUID(strategy_id)
+        count_query = count_query.where(BacktestResult.strategy_id == sid)
+        data_query = data_query.where(BacktestResult.strategy_id == sid)
 
     total = await db.scalar(count_query)
     offset = (page - 1) * page_size
@@ -66,16 +67,16 @@ async def api_list_results(
 
 
 @router.get("/results/{result_id}", response_model=ResponseBase[BacktestResultDetail])
-async def api_get_result(user: CurrentUser, db: DBSession, result_id: str):
-    result = await get_backtest_result(db, user.id, result_id)
+async def api_get_result(user: CurrentUser, db: DBSession, result_id: UUID):
+    result = await get_backtest_result(db, str(user.id), str(result_id))
     if not result:
         raise HTTPException(status_code=404, detail="回测结果不存在")
     return ResponseBase(data=BacktestResultDetail.model_validate(result))
 
 
 @router.delete("/results/{result_id}", response_model=ResponseBase[None])
-async def api_delete_result(user: CurrentUser, db: DBSession, result_id: str):
-    deleted = await delete_backtest_result(db, user.id, result_id)
+async def api_delete_result(user: CurrentUser, db: DBSession, result_id: UUID):
+    deleted = await delete_backtest_result(db, str(user.id), str(result_id))
     if not deleted:
         raise HTTPException(status_code=404, detail="回测结果不存在")
     return ResponseBase()

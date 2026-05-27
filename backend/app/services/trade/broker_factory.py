@@ -25,6 +25,8 @@ async def get_broker_for_user(db: AsyncSession, user_id: str, market: str = "") 
 async def _resolve_broker(db: AsyncSession, user_id: str, market: str) -> BrokerAdapter | None:
     if market == "crypto":
         return await _get_binance_broker(db, user_id)
+    if market == "us_stock":
+        return await _get_alpaca_broker(db, user_id)
     return None
 
 
@@ -58,12 +60,43 @@ async def _get_binance_broker(db: AsyncSession, user_id: str) -> BinanceBroker |
     return broker
 
 
+async def _get_alpaca_broker(db: AsyncSession, user_id: str) -> BrokerAdapter | None:
+    from app.services.trade.brokers.alpaca import AlpacaBroker
+
+    cache_key = f"alpaca:{user_id}"
+    cached = _broker_cache.get(cache_key)
+    if cached and isinstance(cached, AlpacaBroker):
+        return cached
+
+    config = await get_settings_category(db, user_id, "broker:alpaca")
+    api_key = config.get("api_key", "")
+    api_secret = config.get("api_secret", "")
+    if not api_key or not api_secret:
+        logger.warning("broker.no_credentials", broker="alpaca", user_id=user_id)
+        return None
+
+    broker = AlpacaBroker(api_key=api_key, api_secret=api_secret)
+    _broker_cache[cache_key] = broker
+    return broker
+
+
 async def test_broker_connection(db: AsyncSession, user_id: str, broker_name: str) -> dict:
     if broker_name == "akshare":
-        return {"connected": True}
+        try:
+            import akshare
+            return {"connected": True}
+        except ImportError:
+            return {"connected": False, "error": "AKShare 未安装"}
 
     if broker_name == "binance":
         broker = await _get_binance_broker(db, user_id)
+        if not broker:
+            return {"connected": False, "error": "未配置 API Key"}
+        ok = await broker.health_check()
+        return {"connected": ok}
+
+    if broker_name == "alpaca":
+        broker = await _get_alpaca_broker(db, user_id)
         if not broker:
             return {"connected": False, "error": "未配置 API Key"}
         ok = await broker.health_check()

@@ -3,7 +3,7 @@ import { ref, reactive, computed, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { toast } from 'vue-sonner'
 import { useStrategyList, useStartStrategy, useStopStrategy, useDeleteStrategy } from '@/composables/useStrategyQuery'
-import { strategyLogApi } from '@/api/strategy'
+import { strategyLogApi, strategyVersionApi } from '@/api/strategy'
 import { STATUS_LABELS, MARKET_LABELS } from '@/utils/constants'
 import { formatDate } from '@/utils/format'
 import { BasicPage } from '@/components/global-layout'
@@ -54,6 +54,12 @@ const logEntries = ref<any[]>([])
 
 const deleteTarget = ref<{ id: string; name: string } | null>(null)
 
+const versionDialogOpen = ref(false)
+const versionLoading = ref(false)
+const versionStrategyName = ref('')
+const versionStrategyId = ref('')
+const versions = ref<any[]>([])
+
 const loadingActions = reactive(new Set<string>())
 
 const columns: ColumnDef<any>[] = [
@@ -92,6 +98,7 @@ const columns: ColumnDef<any>[] = [
         s.status === 'running'
           ? h(Button, { size: 'sm', variant: 'ghost', onClick: () => showLogs(s.id, s.name) }, () => '日志')
           : null,
+        h(Button, { size: 'sm', variant: 'ghost', onClick: () => showVersions(s.id, s.name) }, () => '版本'),
         s.status !== 'running'
           ? h(Button, { size: 'sm', variant: 'ghost', onClick: () => handleStart(s.id), loading: loadingActions.has(s.id + ':start') }, () => '启动')
           : null,
@@ -149,6 +156,29 @@ async function showLogs(id: string, name: string) {
   } catch { toast.error('加载日志失败') }
   finally { logLoading.value = false }
 }
+
+async function showVersions(id: string, name: string) {
+  versionStrategyId.value = id
+  versionStrategyName.value = name
+  versionDialogOpen.value = true
+  versionLoading.value = true
+  versions.value = []
+  try {
+    const res: any = await strategyVersionApi.list(id)
+    versions.value = res.data || []
+  } catch { toast.error('加载版本失败') }
+  finally { versionLoading.value = false }
+}
+
+async function handleRollback(id: string, version: number) {
+  versionLoading.value = true
+  try {
+    await strategyVersionApi.rollback(id, version)
+    toast.success(`已回滚到版本 ${version}`)
+    showVersions(id, versionStrategyName.value)
+  } catch (e: any) { toast.error(e.message || '回滚失败') }
+  finally { versionLoading.value = false }
+}
 </script>
 
 <template>
@@ -194,6 +224,44 @@ async function showLogs(id: string, name: string) {
                 {{ entry.level }}
               </Badge>
               <span class="break-all">{{ entry.message }}</span>
+            </div>
+          </div>
+        </UiScrollArea>
+      </UiDialogContent>
+    </UiDialog>
+
+    <UiDialog v-model:open="versionDialogOpen">
+      <UiDialogContent class="max-w-2xl">
+        <UiDialogHeader>
+          <UiDialogTitle>{{ versionStrategyName }} - 版本历史</UiDialogTitle>
+          <UiDialogDescription>最近 50 个版本记录，可以将策略回滚到任一版本</UiDialogDescription>
+        </UiDialogHeader>
+        <div v-if="versionLoading" class="flex items-center justify-center py-12">
+          <div class="size-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+        </div>
+        <UiScrollArea v-else class="h-[400px]">
+          <div v-if="!versions.length" class="py-8 text-center text-sm text-muted-foreground">暂无版本记录</div>
+          <div v-else class="space-y-2">
+            <div
+              v-for="(v, idx) in versions"
+              :key="idx"
+              class="flex items-center justify-between p-3 border rounded-md"
+            >
+              <div class="space-y-1 flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <Badge variant="secondary">v{{ v.version }}</Badge>
+                  <span v-if="v.change_note" class="text-xs text-muted-foreground ml-2 truncate">{{ v.change_note }}</span>
+                </div>
+                <p class="text-xs text-muted-foreground">{{ formatDate(v.created_at) }}</p>
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                :loading="versionLoading"
+                @click="handleRollback(versionStrategyId, v.version)"
+              >
+                回滚
+              </Button>
             </div>
           </div>
         </UiScrollArea>
