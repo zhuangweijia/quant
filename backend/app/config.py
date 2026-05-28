@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
 
+    CORS_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

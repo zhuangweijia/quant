@@ -1,6 +1,6 @@
-FROM python:3.11-slim
+FROM python:3.11-slim AS builder
 
-WORKDIR /app
+WORKDIR /build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -8,12 +8,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml .
 COPY app ./app
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir --prefix=/install .
 
-COPY . .
+FROM python:3.11-slim
 
-RUN mkdir -p keys
+RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+COPY alembic ./alembic
+COPY alembic.ini .
+COPY entrypoint.sh .
+COPY keys ./keys
+
+RUN mkdir -p /app/keys && chown -R appuser:appuser /app
+
+USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["sh", "entrypoint.sh"]

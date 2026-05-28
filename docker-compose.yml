@@ -9,47 +9,70 @@ services:
       redis:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql+asyncpg://quant:quant@postgres:5432/quant
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-quant}:${POSTGRES_PASSWORD:-quant}@postgres:5432/${POSTGRES_DB:-quant}
       - REDIS_URL=redis://redis:6379/0
       - JWT_PRIVATE_KEY_PATH=keys/private.pem
       - JWT_PUBLIC_KEY_PATH=keys/public.pem
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      - TRADING_MODE=paper
-      - LOG_LEVEL=INFO
+      - TRADING_MODE=${TRADING_MODE:-paper}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=false
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
     volumes:
-      - ./backend/keys:/app/keys
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+      - backend-keys:/app/keys
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        - VITE_API_BASE_URL=${VITE_API_BASE_URL:-}
+        - VITE_WS_URL=${VITE_WS_URL:-}
     ports:
       - "3000:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: quant
-      POSTGRES_PASSWORD: quant
-      POSTGRES_DB: quant
+      POSTGRES_USER: ${POSTGRES_USER:-quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quant}
+      POSTGRES_DB: ${POSTGRES_DB:-quant}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U quant"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-quant}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -57,7 +80,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   pgdata:
   redisdata:
+  backend-keys:

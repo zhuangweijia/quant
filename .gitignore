@@ -1,0 +1,9 @@
+.env
+.env.*
+!.env.example
+!.env.development
+*.pem
+*.log
+__pycache__/
+*.pyc
+.DS_Store
