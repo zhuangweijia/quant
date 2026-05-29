@@ -11,4 +11,6 @@ fi
 
 alembic upgrade head
 
+python scripts/init_admin.py
+
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000

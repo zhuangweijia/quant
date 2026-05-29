@@ -1,0 +1,14 @@
+name: fix-deployment-gaps
+description: Fix deployment gaps to make QuantPlatform production-ready on this server
+status: proposed
+artifacts:
+  proposal:
+    status: pending
+  design:
+    status: pending
+    depends_on: [proposal]
+  tasks:
+    status: pending
+    depends_on: [design]
+apply:
+  requires: [tasks]

@@ -19,6 +19,7 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY alembic ./alembic
 COPY alembic.ini .
+COPY scripts ./scripts
 COPY entrypoint.sh .
 COPY keys ./keys
 

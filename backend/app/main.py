@@ -3,10 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 import structlog
 
 from app.config import get_settings
-from app.database import init_db, close_db
+from app.database import init_db, close_db, AsyncSessionLocal
 from app.core.events import event_bus
 from app.utils.logger import setup_logging
 from app.api.v1 import router as v1_router
@@ -109,4 +110,28 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    result = {"status": "ok"}
+    status_code = 200
+
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        result["db"] = "ok"
+    except Exception as e:
+        result["db"] = f"error: {e}"
+        status_code = 503
+
+    try:
+        import redis.asyncio as aioredis
+        r = aioredis.from_url(settings.REDIS_URL)
+        await r.ping()
+        await r.close()
+        result["redis"] = "ok"
+    except Exception as e:
+        result["redis"] = f"error: {e}"
+        status_code = 503
+
+    if status_code != 200:
+        result["status"] = "degraded"
+
+    return JSONResponse(content=result, status_code=status_code)
