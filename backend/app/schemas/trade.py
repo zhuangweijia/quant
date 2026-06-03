@@ -42,6 +42,8 @@ class PositionResponse(BaseModel):
     market: str
     qty: Decimal
     avg_price: Decimal
+    current_price: Decimal | None = None
+    market_value: Decimal | None = None
     frozen_qty: Decimal = Decimal("0")
     updated_at: datetime
 

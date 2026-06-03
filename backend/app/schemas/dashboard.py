@@ -17,6 +17,7 @@ class DashboardOverview(BaseModel):
     total_strategies: int
     today_trades: int
     unread_alerts: int
+    mode: str = "paper"
 
 
 class EquityCurvePoint(BaseModel):

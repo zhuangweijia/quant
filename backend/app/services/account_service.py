@@ -11,7 +11,7 @@ from app.models.order import Order
 from app.models.strategy import Strategy
 from app.models.alert import Alert
 from app.models.equity_snapshot import EquitySnapshot
-from app.services.market_service import get_provider
+from app.services.market_service import get_cached_prices
 import structlog
 
 logger = structlog.get_logger()
@@ -34,24 +34,39 @@ async def get_or_create_account(db: AsyncSession, user_id: str) -> Account:
     return account
 
 
-async def get_account_info(db: AsyncSession, user_id: str) -> dict:
-    account = await get_or_create_account(db, user_id)
-
+async def calc_position_values(
+    db: AsyncSession, user_id: str,
+) -> tuple[Decimal, list[dict]]:
     pos_result = await db.execute(
         select(Position).where(Position.user_id == user_id, Position.qty > 0)
     )
     positions = pos_result.scalars().all()
+    if not positions:
+        return Decimal("0"), []
 
-    position_value = Decimal("0")
+    symbols = [(pos.symbol, pos.market) for pos in positions]
+    prices = await get_cached_prices(symbols)
+
+    total_value = Decimal("0")
+    pos_list: list[dict] = []
     for pos in positions:
-        provider = get_provider(pos.market)
-        try:
-            latest = await provider.get_latest_price(pos.symbol)
-            price = Decimal(latest.get("price", "0"))
-            position_value += price * pos.qty
-        except Exception:
-            position_value += pos.avg_price * pos.qty
+        price = prices.get(pos.symbol, pos.avg_price)
+        market_value = price * pos.qty
+        total_value += market_value
+        pos_list.append({
+            "symbol": pos.symbol,
+            "market": pos.market,
+            "qty": pos.qty,
+            "avg_price": pos.avg_price,
+            "current_price": price,
+            "market_value": market_value,
+        })
+    return total_value, pos_list
 
+
+async def get_account_info(db: AsyncSession, user_id: str) -> dict:
+    account = await get_or_create_account(db, user_id)
+    position_value, _ = await calc_position_values(db, user_id)
     total_equity = account.cash + position_value
 
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -63,20 +78,17 @@ async def get_account_info(db: AsyncSession, user_id: str) -> dict:
         )
     ) or 0
 
-    running_result = await db.execute(
+    running_strategies = await db.scalar(
         select(func.count(Strategy.id)).where(Strategy.user_id == user_id, Strategy.status == "running")
-    )
-    running_strategies = running_result.scalar() or 0
+    ) or 0
 
-    total_result = await db.execute(
+    total_strategies = await db.scalar(
         select(func.count(Strategy.id)).where(Strategy.user_id == user_id, Strategy.deleted_at.is_(None))
-    )
-    total_strategies = total_result.scalar() or 0
+    ) or 0
 
-    unread_result = await db.execute(
+    unread_alerts = await db.scalar(
         select(func.count(Alert.id)).where(Alert.user_id == user_id, Alert.read == False)
-    )
-    unread_alerts = unread_result.scalar() or 0
+    ) or 0
 
     today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     daily_pnl = Decimal("0")
@@ -85,17 +97,18 @@ async def get_account_info(db: AsyncSession, user_id: str) -> dict:
     snapshot_result = await db.execute(
         select(EquitySnapshot).where(
             EquitySnapshot.user_id == user_id,
-        ).order_by(EquitySnapshot.date.desc()).limit(2)
+        ).order_by(EquitySnapshot.timestamp.desc()).limit(2)
     )
     snapshots = snapshot_result.scalars().all()
 
     if snapshots:
         latest_snapshot = snapshots[0]
-        if latest_snapshot.date == today_str and len(snapshots) > 1:
+        latest_date = latest_snapshot.timestamp.strftime("%Y-%m-%d")
+        if latest_date == today_str and len(snapshots) > 1:
             yesterday = snapshots[1]
             daily_pnl = latest_snapshot.total_equity - yesterday.total_equity
             daily_pnl_pct = (daily_pnl / yesterday.total_equity * 100) if yesterday.total_equity > 0 else Decimal("0")
-        elif latest_snapshot.date != today_str:
+        elif latest_date != today_str:
             daily_pnl = total_equity - latest_snapshot.total_equity
             daily_pnl_pct = (daily_pnl / latest_snapshot.total_equity * 100) if latest_snapshot.total_equity > 0 else Decimal("0")
 
@@ -120,29 +133,17 @@ async def get_account_info(db: AsyncSession, user_id: str) -> dict:
 
 async def save_equity_snapshot(db: AsyncSession, user_id: str):
     account = await get_or_create_account(db, user_id)
-    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    now = datetime.now(timezone.utc)
 
-    pos_result = await db.execute(
-        select(Position).where(Position.user_id == user_id, Position.qty > 0)
-    )
-    positions = pos_result.scalars().all()
-
-    position_value = Decimal("0")
-    for pos in positions:
-        provider = get_provider(pos.market)
-        try:
-            latest = await provider.get_latest_price(pos.symbol)
-            price = Decimal(latest.get("price", "0"))
-            position_value += price * pos.qty
-        except Exception:
-            position_value += pos.avg_price * pos.qty
-
+    position_value, _ = await calc_position_values(db, user_id)
     total_equity = account.cash + position_value
 
+    hour_key = now.strftime("%Y-%m-%d %H:00")
     existing = await db.execute(
         select(EquitySnapshot).where(
             EquitySnapshot.user_id == user_id,
-            EquitySnapshot.date == today_str,
+            EquitySnapshot.timestamp >= hour_key,
+            EquitySnapshot.timestamp < (now.replace(minute=0, second=0, microsecond=0) + __import__("datetime").timedelta(hours=1)),
         )
     )
     snapshot = existing.scalar_one_or_none()
@@ -151,12 +152,13 @@ async def save_equity_snapshot(db: AsyncSession, user_id: str):
         snapshot.total_equity = total_equity
         snapshot.cash = account.cash
         snapshot.position_value = position_value
+        snapshot.timestamp = now
     else:
         yesterday_eq = account.initial_capital
         prev = await db.execute(
             select(EquitySnapshot).where(
                 EquitySnapshot.user_id == user_id,
-            ).order_by(EquitySnapshot.date.desc()).limit(1)
+            ).order_by(EquitySnapshot.timestamp.desc()).limit(1)
         )
         prev_snap = prev.scalar_one_or_none()
         if prev_snap:
@@ -165,7 +167,7 @@ async def save_equity_snapshot(db: AsyncSession, user_id: str):
         daily_pnl = total_equity - yesterday_eq
         snapshot = EquitySnapshot(
             user_id=user_id,
-            date=today_str,
+            timestamp=now,
             total_equity=total_equity,
             cash=account.cash,
             position_value=position_value,

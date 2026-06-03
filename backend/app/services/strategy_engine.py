@@ -168,7 +168,7 @@ class StrategyEngine:
             )
             self._scheduler.add_job(
                 _equity_snapshot_job,
-                trigger=CronTrigger(hour=15, minute=30),
+                trigger=CronTrigger(minute=0),
                 id="equity_snapshot",
                 replace_existing=True,
             )

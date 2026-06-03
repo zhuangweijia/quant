@@ -1,3 +1,4 @@
+import asyncio
 import random
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
@@ -265,3 +266,92 @@ def get_provider(market: str) -> MarketDataProvider:
     provider = MockDataProvider()
     _providers[market] = provider
     return provider
+
+
+async def get_cached_prices(
+    symbols: list[tuple[str, str]],
+) -> dict[str, Decimal]:
+    import redis.asyncio as aioredis
+    from app.config import get_settings
+
+    if not symbols:
+        return {}
+
+    settings = get_settings()
+    r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+    try:
+        keys = [f"price:{market}:{sym}" for sym, market in symbols]
+        cached = await r.mget(keys)
+        result: dict[str, Decimal] = {}
+        miss_indices: list[int] = []
+
+        for i, (sym, market) in enumerate(symbols):
+            if cached[i] is not None:
+                result[sym] = Decimal(cached[i])
+            else:
+                miss_indices.append(i)
+
+        if not miss_indices:
+            return result
+
+        miss_by_market: dict[str, list[tuple[int, str]]] = {}
+        for idx in miss_indices:
+            sym, market = symbols[idx]
+            miss_by_market.setdefault(market, []).append((idx, sym))
+
+        a_stock_symbols: list[tuple[int, str]] = miss_by_market.pop("a_stock", [])
+        if a_stock_symbols:
+            prices = await _batch_akshare_prices([sym for _, sym in a_stock_symbols])
+            for idx, sym in a_stock_symbols:
+                price = prices.get(sym, Decimal("0"))
+                result[sym] = price
+                await r.set(f"price:a_stock:{sym}", str(price), ex=30)
+
+        for market, items in miss_by_market.items():
+            tasks = []
+            for idx, sym in items:
+                provider = get_provider(market)
+                tasks.append((idx, sym, provider))
+            fetch_results = await asyncio.gather(
+                *[_safe_get_price(provider, sym) for _, sym, provider in tasks],
+                return_exceptions=True,
+            )
+            for (idx, sym, _), price_val in zip(tasks, fetch_results):
+                price = price_val if isinstance(price_val, Decimal) else Decimal("0")
+                result[sym] = price
+                await r.set(f"price:{market}:{sym}", str(price), ex=30)
+
+        return result
+    finally:
+        await r.aclose()
+
+
+async def _safe_get_price(provider: MarketDataProvider, symbol: str) -> Decimal:
+    try:
+        latest = await provider.get_latest_price(symbol)
+        return Decimal(latest.get("price", "0"))
+    except Exception:
+        return Decimal("0")
+
+
+async def _batch_akshare_prices(symbols: list[str]) -> dict[str, Decimal]:
+    if not symbols:
+        return {}
+    try:
+        import akshare as ak
+        import pandas as pd
+
+        def _fetch() -> dict[str, str]:
+            df = ak.stock_zh_a_spot_em()
+            result = {}
+            for sym in symbols:
+                row = df[df["代码"] == sym]
+                if not row.empty:
+                    result[sym] = str(row.iloc[0]["最新价"])
+            return result
+
+        prices_raw = await asyncio.to_thread(_fetch)
+        return {sym: Decimal(val) for sym, val in prices_raw.items()}
+    except Exception as e:
+        logger.error("market.akshare_batch_failed", error=str(e))
+        return {}

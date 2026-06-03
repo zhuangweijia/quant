@@ -117,13 +117,23 @@ async def list_positions(
     user: CurrentUser,
     db: DBSession,
 ):
+    from app.services.account_service import calc_position_values
     result = await db.execute(
         select(Position).where(Position.user_id == user.id, Position.qty > 0)
     )
     positions = result.scalars().all()
-    return ResponseBase(
-        data=[PositionResponse.model_validate(p) for p in positions]
-    )
+    _, pos_list = await calc_position_values(db, user.id)
+    price_map = {p["symbol"]: p for p in pos_list}
+
+    data = []
+    for p in positions:
+        resp = PositionResponse.model_validate(p)
+        pm = price_map.get(p.symbol)
+        if pm:
+            resp.current_price = pm["current_price"]
+            resp.market_value = pm["market_value"]
+        data.append(resp)
+    return ResponseBase(data=data)
 
 
 @router.post("/positions/close", response_model=ResponseBase[OrderResponse])

@@ -83,6 +83,19 @@ async def submit_order(
             order.filled_price = result.get("filled_price", order.price)
             order.commission = result.get("commission", Decimal("0"))
             await _update_position(db, order)
+            try:
+                import redis.asyncio as aioredis
+                from app.config import get_settings
+                settings = get_settings()
+                r = aioredis.from_url(settings.REDIS_URL, decode_responses=True)
+                lock_key = f"snapshot_lock:{user_id}"
+                locked = await r.set(lock_key, "1", ex=60, nx=True)
+                await r.aclose()
+                if locked:
+                    from app.services.account_service import save_equity_snapshot
+                    await save_equity_snapshot(db, user_id)
+            except Exception:
+                pass
         elif status == "rejected":
             order.status = "rejected"
             order.error_message = result.get("reason", "被拒绝")

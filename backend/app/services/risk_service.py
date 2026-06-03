@@ -10,8 +10,8 @@ from app.models.alert import Alert
 from app.models.position import Position
 from app.models.order import Order
 from app.models.risk_event import RiskEvent
-from app.services.account_service import get_or_create_account
-from app.services.market_service import get_provider
+from app.services.account_service import get_or_create_account, calc_position_values
+from app.services.market_service import get_provider, get_cached_prices
 from app.core.events import event_bus
 import structlog
 
@@ -179,35 +179,18 @@ RULE_EVALUATORS = {
 
 async def build_context(db: AsyncSession, user_id: str, symbol: str, market: str = "") -> dict:
     account = await get_or_create_account(db, user_id)
-    pos_result = await db.execute(
-        select(Position).where(Position.user_id == user_id, Position.qty > 0)
-    )
-    positions = pos_result.scalars().all()
+    total_position_value, pos_list = await calc_position_values(db, user_id)
 
-    total_position_value = Decimal("0")
-    position_values = {}
-    position_avg_prices = {}
-    position_markets: dict[str, str] = {}
-    for pos in positions:
-        provider = get_provider(pos.market)
-        position_markets[pos.symbol] = pos.market
-        position_avg_prices[pos.symbol] = float(pos.avg_price)
-        try:
-            latest = await provider.get_latest_price(pos.symbol)
-            price = Decimal(latest.get("price", "0"))
-            value = price * pos.qty
-        except Exception:
-            value = pos.avg_price * pos.qty
-        position_values[pos.symbol] = float(value)
-        total_position_value += value
+    position_values = {p["symbol"]: float(p["market_value"]) for p in pos_list}
+    position_avg_prices = {p["symbol"]: float(p["avg_price"]) for p in pos_list}
+    position_markets = {p["symbol"]: p["market"] for p in pos_list}
 
     current_price = Decimal("0")
     if symbol:
         effective_market = market or position_markets.get(symbol, "mock")
         try:
-            provider = get_provider(effective_market)
-            latest = await provider.get_latest_price(symbol)
-            current_price = Decimal(latest.get("price", "0"))
+            prices = await get_cached_prices([(symbol, effective_market)])
+            current_price = prices.get(symbol, Decimal("0"))
         except Exception:
             pass
 

@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useDashboardOverview, useDashboardEquityCurve, useDashboardStrategyRanking } from '@/composables/useDashboardQuery'
 import { usePositions, useOrders } from '@/composables/useTradeQuery'
 import { useUnreadAlertCount } from '@/composables/useRiskQuery'
+import { useWebSocket } from '@/composables/useWebSocket'
+import { queryClient } from '@/plugins/vue-query'
 import { BasicPage } from '@/components/global-layout'
 import Badge from '@/components/ui/badge/Badge.vue'
 import Button from '@/components/ui/button/Button.vue'
@@ -88,7 +90,7 @@ const positionOption = computed(() => {
   const positions = positionsQuery.data.value || []
   const posData = positions.slice(0, 6).map((p: any) => ({
     name: p.symbol,
-    value: parseFloat(p.qty) * parseFloat(p.avg_price || 0),
+    value: parseFloat(p.market_value || (parseFloat(p.qty) * parseFloat(p.current_price || p.avg_price || 0))),
   }))
   return {
     tooltip: { trigger: 'item', formatter: '{b}: ¥{c}' },
@@ -105,6 +107,46 @@ const positionOption = computed(() => {
 })
 
 function onRangeChange() {}
+
+const { subscribe, onMessage, isConnected } = useWebSocket()
+
+const DASHBOARD_QUERIES = [
+  ['dashboard', 'overview'],
+  ['dashboard', 'equity-curve'],
+  ['dashboard', 'strategy-ranking'],
+  ['trade', 'positions'],
+  ['trade', 'orders'],
+  ['risk', 'alerts'],
+]
+
+function invalidateDashboard() {
+  for (const key of DASHBOARD_QUERIES) {
+    queryClient.invalidateQueries({ queryKey: key })
+  }
+}
+
+const cleanups: (() => void)[] = []
+
+onMounted(() => {
+  subscribe('trade:order', 'trade:fill', 'risk:alert')
+  cleanups.push(onMessage('trade:fill', () => {
+    queryClient.invalidateQueries({ queryKey: ['dashboard', 'overview'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard', 'equity-curve'] })
+    queryClient.invalidateQueries({ queryKey: ['trade', 'positions'] })
+    queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+  }))
+  cleanups.push(onMessage('trade:order', () => {
+    queryClient.invalidateQueries({ queryKey: ['trade', 'orders'] })
+  }))
+  cleanups.push(onMessage('risk:alert', () => {
+    queryClient.invalidateQueries({ queryKey: ['risk', 'alerts'] })
+    queryClient.invalidateQueries({ queryKey: ['dashboard', 'overview'] })
+  }))
+})
+
+onUnmounted(() => {
+  for (const cleanup of cleanups) cleanup()
+})
 
 function getPnlColor(val: any) {
   const n = Number(val)
@@ -253,20 +295,22 @@ function orderStatusLabel(status: string) {
               <UiTableHeader>
                 <UiTableRow>
                   <UiTableHead>策略名称</UiTableHead>
+                  <UiTableHead>状态</UiTableHead>
                   <UiTableHead>总收益</UiTableHead>
                   <UiTableHead>夏普比率</UiTableHead>
                   <UiTableHead>最大回撤</UiTableHead>
                 </UiTableRow>
               </UiTableHeader>
               <UiTableBody>
-                <UiTableRow v-for="row in strategyRanking" :key="row.strategy_name">
-                  <UiTableCell class="font-medium">{{ row.strategy_name }}</UiTableCell>
+                <UiTableRow v-for="row in strategyRanking" :key="row.strategy_id">
+                  <UiTableCell class="font-medium">{{ row.name || row.strategy_name }}</UiTableCell>
+                  <UiTableCell><Badge :variant="row.status === 'running' ? 'default' : 'secondary'">{{ row.status }}</Badge></UiTableCell>
                   <UiTableCell :class="getPnlColor(row.total_return)">{{ formatPercent(row.total_return / 100) }}</UiTableCell>
                   <UiTableCell>{{ Number(row.sharpe_ratio).toFixed(2) }}</UiTableCell>
                   <UiTableCell class="text-red-600 dark:text-red-400">{{ Number(row.max_drawdown).toFixed(2) }}%</UiTableCell>
                 </UiTableRow>
                 <UiTableRow v-if="!strategyRanking.length && !loading">
-                  <UiTableCell :colspan="4" class="h-24 text-center text-muted-foreground">暂无策略表现数据</UiTableCell>
+                  <UiTableCell :colspan="5" class="h-24 text-center text-muted-foreground">暂无策略表现数据</UiTableCell>
                 </UiTableRow>
               </UiTableBody>
             </UiTable>

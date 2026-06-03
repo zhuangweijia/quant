@@ -1,17 +1,18 @@
 from fastapi import APIRouter, Query
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 
 from app.api.deps import CurrentUser, DBSession
 from app.schemas.common import ResponseBase
 from app.schemas.dashboard import DashboardOverview, EquityCurvePoint, StrategyRankItem
-from app.services.account_service import get_account_info
+from app.services.account_service import get_account_info, get_or_create_account, calc_position_values
 from app.models.market_data import BacktestResult
 from app.models.equity_snapshot import EquitySnapshot
+from app.models.strategy import Strategy
 
 router = APIRouter()
 
 
-@router.get("/overview", response_model=ResponseBase[dict])
+@router.get("/overview", response_model=ResponseBase[DashboardOverview])
 async def get_overview(user: CurrentUser, db: DBSession):
     info = await get_account_info(db, user.id)
     return ResponseBase(data=info)
@@ -24,67 +25,83 @@ async def get_equity_curve(
     range: str = Query("1M", pattern=r"^(1D|1W|1M|3M|1Y|ALL)$"),
 ):
     from datetime import timedelta, datetime, timezone
+
+    account = await get_or_create_account(db, user.id)
+    benchmark = float(account.initial_capital)
     range_days = {"1D": 1, "1W": 7, "1M": 30, "3M": 90, "1Y": 365, "ALL": 9999}
     days = range_days.get(range, 30)
 
     query = select(EquitySnapshot).where(
         EquitySnapshot.user_id == user.id,
-    ).order_by(EquitySnapshot.date.asc())
+    ).order_by(EquitySnapshot.timestamp.asc())
 
     if days < 9999:
-        from datetime import timedelta
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-        query = query.where(EquitySnapshot.date >= cutoff)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        query = query.where(EquitySnapshot.timestamp >= cutoff)
 
     result = await db.execute(query)
     snapshots = result.scalars().all()
 
     if not snapshots:
-        from app.services.account_service import get_or_create_account
-        account = await get_or_create_account(db, user.id)
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc)
         return ResponseBase(data=[EquityCurvePoint(
-            date=today,
+            date=now.strftime("%Y-%m-%d %H:%M"),
             equity=float(account.cash),
-            benchmark=float(account.initial_capital),
+            benchmark=benchmark,
         )])
 
-    points = []
-    initial = float(snapshots[0].total_equity) if snapshots else 1000000
-    for snap in snapshots:
-        points.append(EquityCurvePoint(
-            date=snap.date,
-            equity=float(snap.total_equity),
-            benchmark=initial,
-        ))
+    if range in ("1D", "1W"):
+        points = [EquityCurvePoint(
+            date=s.timestamp.strftime("%Y-%m-%d %H:%M"),
+            equity=float(s.total_equity),
+            benchmark=benchmark,
+        ) for s in snapshots]
+    else:
+        daily: dict[str, EquitySnapshot] = {}
+        for s in snapshots:
+            day_key = s.timestamp.strftime("%Y-%m-%d")
+            daily[day_key] = s
+        points = [EquityCurvePoint(
+            date=day,
+            equity=float(s.total_equity),
+            benchmark=benchmark,
+        ) for day, s in sorted(daily.items())]
 
     return ResponseBase(data=points)
 
 
 @router.get("/strategy-ranking", response_model=ResponseBase[list[StrategyRankItem]])
 async def get_strategy_ranking(user: CurrentUser, db: DBSession):
-    from app.models.strategy import Strategy
-    result = await db.execute(
-        select(Strategy).where(Strategy.user_id == user.id, Strategy.status == "running")
-    )
-    strategies = result.scalars().all()
-
     backtest_result = await db.execute(
         select(BacktestResult).where(BacktestResult.user_id == user.id)
         .order_by(BacktestResult.created_at.desc())
     )
     backtests = {str(bt.strategy_id): bt for bt in backtest_result.scalars().all()}
 
+    if not backtests:
+        return ResponseBase(data=[])
+
+    strategy_ids = list(backtests.keys())
+    result = await db.execute(
+        select(Strategy).where(
+            Strategy.user_id == user.id,
+            Strategy.id.in_([text(f"'{sid}'") for sid in strategy_ids[:10]]),
+        )
+    )
+    strategies = {str(s.id): s for s in result.scalars().all()}
+
     items = []
-    for s in strategies:
-        bt = backtests.get(str(s.id))
+    for sid, bt in backtests.items():
+        s = strategies.get(sid)
         items.append(StrategyRankItem(
-            strategy_id=s.id,
-            name=s.name,
-            total_return=float(bt.total_return) if bt and bt.total_return else 0,
-            sharpe_ratio=float(bt.sharpe_ratio) if bt and bt.sharpe_ratio else 0,
-            max_drawdown=float(bt.max_drawdown) if bt and bt.max_drawdown else 0,
-            trade_count=bt.trade_count if bt else 0,
-            status=s.status,
+            strategy_id=bt.strategy_id,
+            name=s.name if s else str(bt.strategy_id),
+            total_return=float(bt.total_return) if bt.total_return else 0,
+            sharpe_ratio=float(bt.sharpe_ratio) if bt.sharpe_ratio else 0,
+            max_drawdown=float(bt.max_drawdown) if bt.max_drawdown else 0,
+            trade_count=bt.trade_count if bt.trade_count else 0,
+            status=s.status if s else "unknown",
         ))
-    return ResponseBase(data=items)
+
+    items.sort(key=lambda x: x.total_return, reverse=True)
+    return ResponseBase(data=items[:10])
