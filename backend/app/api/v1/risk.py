@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request
 from sqlalchemy import select, func
 
 from app.api.deps import CurrentUser, DBSession
@@ -9,6 +9,7 @@ from app.models.alert import Alert
 from app.schemas.common import ResponseBase, PageResponse
 from app.schemas.risk import RiskRuleCreate, RiskRuleUpdate, RiskRuleResponse, AlertResponse
 from app.services.risk_service import mark_all_alerts_read, get_unread_count
+from app.services.audit_service import log_action, extract_request_info
 
 router = APIRouter()
 
@@ -25,7 +26,7 @@ async def list_rules(user: CurrentUser, db: DBSession):
 
 
 @router.post("/rules", response_model=ResponseBase[RiskRuleResponse], status_code=201)
-async def create_rule(user: CurrentUser, db: DBSession, payload: RiskRuleCreate):
+async def create_rule(user: CurrentUser, db: DBSession, payload: RiskRuleCreate, request: Request):
     count_result = await db.scalar(
         select(func.count(RiskRule.id)).where(RiskRule.user_id == user.id)
     )
@@ -42,6 +43,10 @@ async def create_rule(user: CurrentUser, db: DBSession, payload: RiskRuleCreate)
     )
     db.add(rule)
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="risk.rule_create", resource_type="risk_rule", resource_id=str(rule.id), detail={"rule_type": payload.rule_type}, ip_address=ip, user_agent=ua)
+
     return ResponseBase(data=RiskRuleResponse.model_validate(rule))
 
 
@@ -51,6 +56,7 @@ async def update_rule(
     db: DBSession,
     rule_id: UUID,
     payload: RiskRuleUpdate,
+    request: Request,
 ):
     rule = await db.get(RiskRule, rule_id)
     if not rule or rule.user_id != user.id:
@@ -59,6 +65,10 @@ async def update_rule(
     for key, value in update_data.items():
         setattr(rule, key, value)
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="risk.rule_update", resource_type="risk_rule", resource_id=str(rule_id), ip_address=ip, user_agent=ua)
+
     return ResponseBase(data=RiskRuleResponse.model_validate(rule))
 
 
@@ -73,12 +83,16 @@ async def toggle_rule(user: CurrentUser, db: DBSession, rule_id: UUID):
 
 
 @router.delete("/rules/{rule_id}", response_model=ResponseBase[None])
-async def delete_rule(user: CurrentUser, db: DBSession, rule_id: UUID):
+async def delete_rule(user: CurrentUser, db: DBSession, rule_id: UUID, request: Request):
     rule = await db.get(RiskRule, rule_id)
     if not rule or rule.user_id != user.id:
         raise HTTPException(status_code=404, detail="规则不存在")
     await db.delete(rule)
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="risk.rule_delete", resource_type="risk_rule", resource_id=str(rule_id), ip_address=ip, user_agent=ua)
+
     return ResponseBase()
 
 

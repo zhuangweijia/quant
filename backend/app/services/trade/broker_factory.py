@@ -16,7 +16,13 @@ _broker_cache: dict[str, BrokerAdapter] = {}
 async def get_broker_for_user(db: AsyncSession, user_id: str, market: str = "") -> BrokerAdapter:
     account = await get_or_create_account(db, user_id)
     if account.mode == "paper":
-        return get_paper_broker()
+        cache_key = f"paper:{user_id}"
+        cached = _broker_cache.get(cache_key)
+        if cached and isinstance(cached, PaperBroker):
+            return cached
+        broker = PaperBroker()
+        _broker_cache[cache_key] = broker
+        return broker
 
     broker = await _resolve_broker(db, user_id, market)
     return broker or get_paper_broker()
@@ -83,10 +89,17 @@ async def _get_alpaca_broker(db: AsyncSession, user_id: str) -> BrokerAdapter | 
 async def test_broker_connection(db: AsyncSession, user_id: str, broker_name: str) -> dict:
     if broker_name == "akshare":
         try:
-            import akshare
+            import akshare as ak
+            import asyncio
+            await asyncio.wait_for(
+                asyncio.to_thread(ak.stock_zh_index_spot_em),
+                timeout=10,
+            )
             return {"connected": True}
         except ImportError:
             return {"connected": False, "error": "AKShare 未安装"}
+        except Exception as e:
+            return {"connected": False, "error": f"AKShare 连接失败: {e}"}
 
     if broker_name == "binance":
         broker = await _get_binance_broker(db, user_id)

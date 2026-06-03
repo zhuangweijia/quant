@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Query, HTTPException, status
+from fastapi import APIRouter, Query, HTTPException, Request, status
 from sqlalchemy import select, func
 
 from app.api.deps import CurrentUser, DBSession
@@ -13,6 +13,7 @@ from app.schemas.strategy import (
     StrategyDetail,
 )
 from app.models.strategy_version import StrategyVersion
+from app.services.audit_service import log_action, extract_request_info
 
 router = APIRouter()
 
@@ -69,6 +70,7 @@ async def create_strategy(
     user: CurrentUser,
     db: DBSession,
     payload: StrategyCreate,
+    request: Request,
 ):
     count = await db.scalar(
         select(func.count(Strategy.id)).where(
@@ -92,6 +94,10 @@ async def create_strategy(
     )
     db.add(strategy)
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="strategy.create", resource_type="strategy", resource_id=str(strategy.id), detail={"name": payload.name}, ip_address=ip, user_agent=ua)
+
     return ResponseBase(data=StrategyDetail.model_validate(strategy))
 
 
@@ -147,6 +153,7 @@ async def delete_strategy(
     user: CurrentUser,
     db: DBSession,
     strategy_id: UUID,
+    request: Request,
 ):
     strategy = await db.get(Strategy, strategy_id)
     if not strategy or strategy.user_id != user.id or strategy.deleted_at:
@@ -157,6 +164,10 @@ async def delete_strategy(
     from datetime import datetime, timezone
     strategy.deleted_at = datetime.now(timezone.utc)
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="strategy.delete", resource_type="strategy", resource_id=str(strategy_id), ip_address=ip, user_agent=ua)
+
     return ResponseBase()
 
 
@@ -165,6 +176,7 @@ async def start_strategy(
     user: CurrentUser,
     db: DBSession,
     strategy_id: UUID,
+    request: Request,
 ):
     strategy = await db.get(Strategy, strategy_id)
     if not strategy or strategy.user_id != user.id or strategy.deleted_at:
@@ -203,6 +215,10 @@ async def start_strategy(
 
     strategy.status = "running"
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="strategy.start", resource_type="strategy", resource_id=str(strategy_id), ip_address=ip, user_agent=ua)
+
     return ResponseBase()
 
 
@@ -211,6 +227,7 @@ async def stop_strategy(
     user: CurrentUser,
     db: DBSession,
     strategy_id: UUID,
+    request: Request,
 ):
     strategy = await db.get(Strategy, strategy_id)
     if not strategy or strategy.user_id != user.id or strategy.deleted_at:
@@ -223,4 +240,8 @@ async def stop_strategy(
 
     strategy.status = "stopped"
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="strategy.stop", resource_type="strategy", resource_id=str(strategy_id), ip_address=ip, user_agent=ua)
+
     return ResponseBase()

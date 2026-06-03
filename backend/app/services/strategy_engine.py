@@ -7,6 +7,7 @@ from typing import Any
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import select
 
 from app.core.types import BaseStrategy, BarData, OrderSide, OrderType
@@ -121,6 +122,34 @@ async def _risk_check_job():
         logger.error("risk_check_job.failed", error=str(e))
 
 
+async def _equity_snapshot_job():
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models.account import Account
+        from app.services.account_service import save_equity_snapshot
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(Account))
+            accounts = result.scalars().all()
+            for account in accounts:
+                try:
+                    await save_equity_snapshot(db, account.user_id)
+                    await db.commit()
+                except Exception as e:
+                    logger.error("equity_snapshot.account_failed", user_id=account.user_id, error=str(e))
+                    await db.rollback()
+    except Exception as e:
+        logger.error("equity_snapshot_job.failed", error=str(e))
+
+
+async def _data_cleanup_job():
+    try:
+        from app.services.cleanup_service import run_cleanup
+        await run_cleanup()
+    except Exception as e:
+        logger.error("data_cleanup_job.failed", error=str(e))
+
+
 class StrategyEngine:
     def __init__(self):
         self._instances: dict[str, dict] = {}
@@ -135,6 +164,18 @@ class StrategyEngine:
                 _risk_check_job,
                 trigger=IntervalTrigger(minutes=1),
                 id="risk_stop_loss_take_profit",
+                replace_existing=True,
+            )
+            self._scheduler.add_job(
+                _equity_snapshot_job,
+                trigger=CronTrigger(hour=15, minute=30),
+                id="equity_snapshot",
+                replace_existing=True,
+            )
+            self._scheduler.add_job(
+                _data_cleanup_job,
+                trigger=CronTrigger(hour=3, minute=0),
+                id="data_cleanup",
                 replace_existing=True,
             )
             logger.info("strategy_engine.started")

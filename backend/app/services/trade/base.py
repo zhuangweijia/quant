@@ -156,11 +156,5 @@ class PaperBroker(BrokerAdapter):
         return True
 
 
-_broker_instance: PaperBroker | None = None
-
-
 def get_paper_broker() -> PaperBroker:
-    global _broker_instance
-    if _broker_instance is None:
-        _broker_instance = PaperBroker()
-    return _broker_instance
+    return PaperBroker()

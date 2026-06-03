@@ -14,7 +14,7 @@ from app.services.auth_service import AuthService
 async def main():
     database_url = os.environ.get("DATABASE_URL", "")
     admin_username = os.environ.get("ADMIN_USERNAME", "admin")
-    admin_password = os.environ.get("ADMIN_PASSWORD", "admin")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@2024")
 
     if not database_url:
         print("ERROR: DATABASE_URL not set")

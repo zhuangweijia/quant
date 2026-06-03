@@ -9,10 +9,12 @@ import structlog
 from app.config import get_settings
 from app.database import init_db, close_db, AsyncSessionLocal
 from app.core.events import event_bus
+from app.core.validation import validate_config
 from app.utils.logger import setup_logging
 from app.api.v1 import router as v1_router
 from app.core.exceptions import AppException
 from app.ws import ws_manager
+from app.middleware.rate_limit import RateLimitMiddleware
 
 logger = structlog.get_logger()
 
@@ -33,6 +35,7 @@ async def lifespan(app: FastAPI):
     setup_logging()
     logger.info("app.starting")
     await init_db()
+    await validate_config()
     try:
         await event_bus.connect()
     except Exception as e:
@@ -79,6 +82,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+app.add_middleware(
+    RateLimitMiddleware,
+    default_limit=settings.RATE_LIMIT_PER_MINUTE,
+    trade_limit=settings.RATE_LIMIT_TRADE_PER_MINUTE,
+    backtest_limit=3,
 )
 
 app.include_router(v1_router, prefix=settings.API_PREFIX)

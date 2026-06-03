@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import structlog
 
 from app.services.trade.base import BrokerAdapter
@@ -31,20 +33,19 @@ class AlpacaBroker(BrokerAdapter):
         symbol: str,
         side: str,
         order_type: str,
-        qty: float,
-        price: float | None = None,
-        strategy_id: str | None = None,
-    ) -> str:
+        qty: Decimal,
+        price: Decimal | None = None,
+    ) -> dict:
         client = self._get_client()
         if not client:
             raise RuntimeError("Alpaca client not available")
         import asyncio
         return await asyncio.to_thread(
-            self._submit_order_sync, symbol, side, order_type, qty, price
+            self._submit_order_sync, symbol, side, order_type, float(qty), float(price) if price else None
         )
 
     def _submit_order_sync(self, symbol, side, order_type, qty, price):
-        from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
+        from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, StopOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
 
         side_enum = OrderSide.BUY if side == "buy" else OrderSide.SELL
@@ -54,6 +55,14 @@ class AlpacaBroker(BrokerAdapter):
                 symbol=symbol,
                 qty=qty,
                 side=side_enum,
+                time_in_force=TimeInForce.GTC,
+            )
+        elif order_type == "stop":
+            request = StopOrderRequest(
+                symbol=symbol,
+                qty=qty,
+                side=side_enum,
+                stop_price=price,
                 time_in_force=TimeInForce.GTC,
             )
         else:
@@ -66,19 +75,25 @@ class AlpacaBroker(BrokerAdapter):
             )
 
         resp = self._client.submit_order(request)
-        return resp.id
+        return {
+            "broker_order_id": str(resp.id),
+            "status": str(resp.status).lower() if resp.status else "submitted",
+            "filled_qty": Decimal(str(resp.filled_qty or 0)),
+            "filled_price": Decimal(str(resp.filled_avg_price)) if resp.filled_avg_price else None,
+            "commission": Decimal("0"),
+        }
 
-    async def cancel_order(self, order_id: str) -> bool:
+    async def cancel_order(self, broker_order_id: str) -> dict:
         client = self._get_client()
         if not client:
-            return False
+            return {"status": "error", "reason": "client not available"}
         import asyncio
         try:
-            await asyncio.to_thread(self._client.cancel_order_by_id, order_id)
-            return True
+            await asyncio.to_thread(client.cancel_order_by_id, broker_order_id)
+            return {"status": "cancelled"}
         except Exception as e:
-            logger.error("alpaca.cancel_failed", order_id=order_id, error=str(e))
-            return False
+            logger.error("alpaca.cancel_failed", order_id=broker_order_id, error=str(e))
+            return {"status": "error", "reason": str(e)}
 
     async def get_order_status(self, order_id: str) -> dict:
         client = self._get_client()

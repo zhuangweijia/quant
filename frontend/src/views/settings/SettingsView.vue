@@ -92,8 +92,15 @@ const profile = ref({ username: '', email: '' })
 const passwordForm = ref({ old_password: '', new_password: '', confirm_password: '' })
 const passwordDialog = ref(false)
 
-const brokerName = ref('default')
+const brokerOptions = [
+  { value: 'binance', label: 'Binance' },
+  { value: 'alpaca', label: 'Alpaca' },
+  { value: 'akshare', label: 'AKShare (A股)' },
+]
+
+const brokerName = ref('binance')
 const broker = ref({ api_key: '', api_secret: '', testnet: false })
+const isAkshare = computed(() => brokerName.value === 'akshare')
 const tradingMode = ref('paper')
 
 const notifications = ref({ email_enabled: false, webhook_enabled: false, email_address: '', webhook_url: '' })
@@ -117,10 +124,28 @@ watch(profileData, (d: any) => {
 
 watch(brokersData, (d: any) => {
   if (Array.isArray(d) && d.length) {
-    brokerName.value = d[0].broker_name || 'default'
-    broker.value = { api_key: d[0].api_key || '', api_secret: d[0].api_secret || '', testnet: d[0].params?.testnet || false }
+    loadBrokerForm(brokerName.value, d)
   }
 })
+
+function loadBrokerForm(name: string, data: any[] | undefined) {
+  if (!Array.isArray(data)) return
+  const b = data.find((item: any) => item.broker_name === name)
+  if (b) {
+    broker.value = {
+      api_key: b.api_key || '',
+      api_secret: '',
+      testnet: b.params?.testnet || false,
+    }
+  } else {
+    broker.value = { api_key: '', api_secret: '', testnet: false }
+  }
+}
+
+function onBrokerChange(name: string) {
+  brokerName.value = name
+  loadBrokerForm(name, brokersData.value as any)
+}
 
 watch(tradingModeData, (d: any) => {
   if (d) {
@@ -261,14 +286,27 @@ async function resetSystemParams() {
           </UiCardHeader>
           <UiCardContent class="space-y-4">
             <div class="space-y-2">
-              <Label>API Key</Label>
+              <Label>选择券商</Label>
+              <UiSelect :model-value="brokerName" @update:model-value="onBrokerChange">
+                <UiSelectTrigger class="w-64"><UiSelectValue /></UiSelectTrigger>
+                <UiSelectContent>
+                  <UiSelectItem v-for="opt in brokerOptions" :key="opt.value" :value="opt.value">
+                    {{ opt.label }}
+                  </UiSelectItem>
+                </UiSelectContent>
+              </UiSelect>
+            </div>
+            <UiSeparator />
+            <p v-if="isAkshare" class="text-sm text-muted-foreground">AKShare 基础功能无需 API 凭证</p>
+            <div class="space-y-2">
+              <Label>API Key {{ isAkshare ? '(可选)' : '' }}</Label>
               <Input v-model="broker.api_key" type="password" placeholder="输入 API Key" />
             </div>
             <div class="space-y-2">
-              <Label>API Secret</Label>
+              <Label>API Secret {{ isAkshare ? '(可选)' : '' }}</Label>
               <Input v-model="broker.api_secret" type="password" placeholder="输入 API Secret" />
             </div>
-            <div class="flex items-center justify-between">
+            <div v-if="!isAkshare" class="flex items-center justify-between">
               <Label>使用测试网</Label>
               <UiSwitch v-model:checked="broker.testnet" />
             </div>

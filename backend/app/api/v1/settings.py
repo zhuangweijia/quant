@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, DBSession
 from app.schemas.common import ResponseBase
+from app.services.audit_service import log_action, extract_request_info
 
 router = APIRouter()
 
@@ -59,7 +60,7 @@ async def get_brokers(user: CurrentUser, db: DBSession):
         {
             "broker_name": "binance",
             "market": "crypto",
-            "api_key": binance_config.get("api_key", ""),
+            "api_key": binance_config.get("api_key") or "",
             "has_secret": bool(binance_config.get("api_secret")),
             "params": {
                 "testnet": binance_params.get("testnet", False),
@@ -70,7 +71,7 @@ async def get_brokers(user: CurrentUser, db: DBSession):
         {
             "broker_name": "alpaca",
             "market": "us_stock",
-            "api_key": alpaca_config.get("api_key", ""),
+            "api_key": alpaca_config.get("api_key") or "",
             "has_secret": bool(alpaca_config.get("api_secret")),
             "params": {"environment": alpaca_config.get("environment", "paper")},
             "connected": False,
@@ -89,7 +90,7 @@ async def get_brokers(user: CurrentUser, db: DBSession):
 
 @router.put("/brokers/{broker_name}", response_model=ResponseBase[dict])
 async def save_broker_config(
-    user: CurrentUser, db: DBSession, broker_name: str, payload: BrokerConfigRequest
+    user: CurrentUser, db: DBSession, broker_name: str, payload: BrokerConfigRequest, request: Request
 ):
     if broker_name not in ("binance", "alpaca", "akshare"):
         raise HTTPException(status_code=400, detail="不支持的交易所")
@@ -106,6 +107,9 @@ async def save_broker_config(
 
     from app.services.trade.broker_factory import invalidate_broker_cache
     invalidate_broker_cache(user.id, broker_name)
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="settings.broker_update", resource_type="broker", resource_id=broker_name, detail={"broker_name": broker_name}, ip_address=ip, user_agent=ua)
 
     return ResponseBase(data={"broker_name": broker_name, "saved": True})
 
@@ -128,7 +132,7 @@ async def get_trading_mode(user: CurrentUser, db: DBSession):
 
 
 @router.put("/trading-mode", response_model=ResponseBase[dict])
-async def set_trading_mode(user: CurrentUser, db: DBSession, payload: TradingModeRequest):
+async def set_trading_mode(user: CurrentUser, db: DBSession, payload: TradingModeRequest, request: Request):
     if payload.mode not in ("paper", "live"):
         raise HTTPException(status_code=400, detail="无效的交易模式")
     if payload.mode == "live" and not payload.password:
@@ -143,8 +147,13 @@ async def set_trading_mode(user: CurrentUser, db: DBSession, payload: TradingMod
 
     from app.services.account_service import get_or_create_account
     account = await get_or_create_account(db, user.id)
+    old_mode = account.mode
     account.mode = payload.mode
     await db.flush()
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="settings.trading_mode_change", detail={"old_mode": old_mode, "new_mode": payload.mode}, ip_address=ip, user_agent=ua)
+
     return ResponseBase(data={"mode": account.mode})
 
 

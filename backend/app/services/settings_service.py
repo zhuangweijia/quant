@@ -35,7 +35,8 @@ async def get_setting(db: AsyncSession, user_id: str | None, category: str, key:
         try:
             return Encryption.decrypt(setting.value)
         except Exception:
-            return setting.value
+            logger.error("settings.decrypt_failed", key=key, category=category)
+            return None
     return setting.value if setting else None
 
 
@@ -54,10 +55,7 @@ async def set_setting(
 
     store_value = value
     if encrypted and value:
-        try:
-            store_value = Encryption.encrypt(value)
-        except Exception:
-            logger.warning("settings.encrypt_failed", key=key)
+        store_value = Encryption.encrypt(value)
 
     if setting:
         setting.value = store_value
@@ -90,7 +88,8 @@ async def get_settings_category(db: AsyncSession, user_id: str | None, category:
             try:
                 data[s.key] = Encryption.decrypt(s.value)
             except Exception:
-                data[s.key] = s.value
+                logger.error("settings.decrypt_failed", key=s.key, category=category)
+                data[s.key] = None
         else:
             data[s.key] = s.value
     return data

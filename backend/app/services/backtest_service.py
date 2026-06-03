@@ -15,6 +15,10 @@ import structlog
 
 logger = structlog.get_logger()
 
+_MAX_CONCURRENT_BACKTESTS = 3
+_BACKTEST_TIMEOUT_SECONDS = 600
+_backtest_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_BACKTESTS)
+
 
 _SAFE_BUILTINS = {
     "len": len, "range": range, "min": min, "max": max, "abs": abs,
@@ -155,11 +159,47 @@ async def run_backtest(db: AsyncSession, user_id: str, payload: dict) -> Backtes
     db.add(result)
     await db.flush()
 
+    if _backtest_semaphore.locked():
+        result.status = "failed"
+        result.error_message = "回测并发数已达上限，请稍后重试"
+        await db.flush()
+        return result
+
     asyncio.create_task(_execute_backtest(result.id, user_id, payload))
     return result
 
 
 async def _execute_backtest(result_id: str, user_id: str, payload: dict):
+    from app.database import AsyncSessionLocal
+    try:
+        async with _backtest_semaphore:
+            async with asyncio.timeout(_BACKTEST_TIMEOUT_SECONDS):
+                await _do_execute_backtest(result_id, user_id, payload)
+    except asyncio.TimeoutError:
+        logger.error("backtest.timeout", result_id=result_id)
+        try:
+            async with AsyncSessionLocal() as db:
+                r = await db.get(BacktestResult, result_id)
+                if r:
+                    r.status = "failed"
+                    r.error_message = f"回测执行超时（{_BACKTEST_TIMEOUT_SECONDS}秒）"
+                    await db.commit()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.exception("backtest.execution_failed", result_id=result_id, error=str(e))
+        try:
+            async with AsyncSessionLocal() as db:
+                r = await db.get(BacktestResult, result_id)
+                if r:
+                    r.status = "failed"
+                    r.error_message = str(e)[:1000]
+                    await db.commit()
+        except Exception:
+            pass
+
+
+async def _do_execute_backtest(result_id: str, user_id: str, payload: dict):
     from app.database import AsyncSessionLocal
     try:
         async with AsyncSessionLocal() as db:
@@ -319,6 +359,25 @@ async def _execute_backtest(result_id: str, user_id: str, payload: dict):
             else:
                 total_holding_bars += 1
         avg_holding = (total_holding_bars / len(completed_trades)) if completed_trades else 0
+
+        downside_returns = [r for r in returns if r < 0] if returns else []
+        downside_dev = math.sqrt(sum(r ** 2 for r in downside_returns) / len(downside_returns)) if downside_returns else 0
+        sortino = (sum(returns) / len(returns) / downside_dev * math.sqrt(252)) if (downside_dev > 0 and returns) else 0
+
+        calmar = annual_return / max_dd if max_dd > 0 else 0
+
+        monthly_equity: dict[str, float] = {}
+        for pt in ctx.equity_curve:
+            ts = pt["timestamp"]
+            key = ts[:7] if isinstance(ts, str) else ts.strftime("%Y-%m")
+            monthly_equity[key] = pt["equity"]
+        monthly_keys = sorted(monthly_equity.keys())
+        monthly_summary = {}
+        for i in range(1, len(monthly_keys)):
+            prev_eq = monthly_equity[monthly_keys[i - 1]]
+            curr_eq = monthly_equity[monthly_keys[i]]
+            if prev_eq > 0:
+                monthly_summary[monthly_keys[i]] = round((curr_eq - prev_eq) / prev_eq * 100, 4)
 
         async with AsyncSessionLocal() as db:
             r = await db.get(BacktestResult, result_id)

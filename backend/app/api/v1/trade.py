@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request
 from sqlalchemy import select, func
 
 from app.api.deps import CurrentUser, DBSession
@@ -11,6 +11,7 @@ from app.schemas.trade import OrderRequest, OrderResponse, PositionResponse, Acc
 from app.services.trade.order_manager import submit_order, cancel_order, close_position
 from app.services.risk_service import evaluate_risk
 from app.services.account_service import get_account_info
+from app.services.audit_service import log_action, extract_request_info
 
 router = APIRouter()
 
@@ -20,6 +21,7 @@ async def create_order(
     user: CurrentUser,
     db: DBSession,
     payload: OrderRequest,
+    request: Request,
 ):
     order_data = {
         "symbol": payload.symbol,
@@ -41,6 +43,9 @@ async def create_order(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="trade.order_submit", resource_type="order", resource_id=str(order.id), detail={"symbol": payload.symbol, "side": payload.side, "order_type": payload.order_type, "qty": str(payload.qty)}, ip_address=ip, user_agent=ua)
+
     return ResponseBase(data=OrderResponse.model_validate(order))
 
 
@@ -49,11 +54,16 @@ async def api_cancel_order(
     user: CurrentUser,
     db: DBSession,
     order_id: UUID,
+    request: Request,
 ):
     try:
         await cancel_order(db, user.id, str(order_id))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="trade.order_cancel", resource_type="order", resource_id=str(order_id), ip_address=ip, user_agent=ua)
+
     return ResponseBase()
 
 
@@ -120,12 +130,17 @@ async def list_positions(
 async def api_close_position(
     user: CurrentUser,
     db: DBSession,
+    request: Request,
     position_id: str = Query(...),
 ):
     try:
         order = await close_position(db, user.id, position_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="trade.position_close", resource_type="position", resource_id=position_id, detail={"symbol": order.symbol, "qty": str(order.qty)}, ip_address=ip, user_agent=ua)
+
     return ResponseBase(data=OrderResponse.model_validate(order))
 
 

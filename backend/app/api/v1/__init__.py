@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import auth, market, strategy, backtest, trade, risk, dashboard, settings
-from app.api.v1 import strategy_logs, watchlist, strategy_versions
+from app.api.v1 import strategy_logs, watchlist, strategy_versions, admin
 
 router = APIRouter()
 
@@ -16,3 +16,4 @@ router.include_router(risk.router, prefix="/risk", tags=["风控"])
 router.include_router(dashboard.router, prefix="/dashboard", tags=["看板"])
 router.include_router(settings.router, prefix="/settings", tags=["设置"])
 router.include_router(watchlist.router, prefix="/market/watchlist", tags=["自选"])
+router.include_router(admin.router, prefix="/admin", tags=["管理"])
