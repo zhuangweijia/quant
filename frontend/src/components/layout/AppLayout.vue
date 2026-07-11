@@ -20,31 +20,38 @@ function openCommandMenu() {
   <UiSidebarProvider>
     <AppSidebar />
     <UiSidebarInset>
-      <header class="flex h-14 items-center gap-3 border-b px-4 shrink-0">
-        <UiSidebarTrigger class="-ml-1" />
-        <UiSeparator orientation="vertical" class="h-6" />
-        <Button variant="outline" size="sm" class="ml-2 gap-2 text-muted-foreground" @click="openCommandMenu">
+      <header class="flex h-16 shrink-0 items-center gap-4 border-b bg-background/95 px-5 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:px-6">
+        <UiSidebarTrigger class="size-9" />
+        <UiSeparator orientation="vertical" class="h-7" />
+        <Button
+          variant="outline"
+          size="sm"
+          class="h-9 w-11 justify-start rounded-full px-3 text-muted-foreground shadow-none sm:w-64 sm:px-4"
+          @click="openCommandMenu"
+        >
           <Search class="size-4" />
-          <span class="hidden sm:inline">搜索...</span>
-          <kbd class="pointer-events-none hidden sm:inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+          <span class="hidden flex-1 text-left sm:inline">搜索...</span>
+          <kbd class="pointer-events-none hidden h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex">
             ⌘K
           </kbd>
         </Button>
         <div class="flex-1" />
         <div class="flex items-center gap-2">
-          <UiButton variant="ghost" size="icon" @click="toggleTheme">
+          <UiButton variant="ghost" size="icon" class="size-9 rounded-full" @click="toggleTheme">
             <SunMedium v-if="!isDark" class="size-4" />
             <MoonStar v-else class="size-4" />
           </UiButton>
         </div>
       </header>
 
-      <main class="flex-1 p-6 overflow-auto">
-        <router-view v-slot="{ Component, route }">
-          <transition name="page" mode="out-in">
-            <component :is="Component" :key="route.path" />
-          </transition>
-        </router-view>
+      <main class="flex-1 overflow-auto">
+        <div class="mx-auto w-full max-w-7xl px-5 py-7 sm:px-6 lg:px-8 lg:py-8">
+          <router-view v-slot="{ Component, route }">
+            <transition name="page" mode="out-in">
+              <component :is="Component" :key="route.path" />
+            </transition>
+          </router-view>
+        </div>
       </main>
     </UiSidebarInset>
     <CommandMenu ref="commandMenuRef" />

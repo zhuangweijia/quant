@@ -37,7 +37,7 @@ const props = withDefaults(defineProps<Props>(), {
     >
       <span class="size-4 animate-spin rounded-full border-2 border-current border-t-transparent inline-block" />
     </span>
-    <span :class="loading ? 'invisible' : ''">
+    <span :class="cn('inline-flex items-center justify-center gap-2', loading ? 'invisible' : '')">
       <slot />
     </span>
   </Primitive>

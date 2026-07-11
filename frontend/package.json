@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "test:layout": "node scripts/verify-spacious-layout.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

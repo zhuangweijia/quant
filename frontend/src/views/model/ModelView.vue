@@ -102,18 +102,24 @@ onMounted(() => fetchVersions())
 
 <template>
   <div class="space-y-6">
-    <div class="flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <BrainCircuit class="size-6 text-primary" />
-        <h1 class="text-2xl font-bold">模型管理</h1>
+    <div class="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+      <div class="flex min-w-0 items-center gap-3">
+        <div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <BrainCircuit class="size-5" />
+        </div>
+        <div class="min-w-0">
+          <h1 class="text-2xl font-semibold tracking-normal">模型管理</h1>
+        </div>
       </div>
-      <div class="flex gap-2">
-        <Button variant="outline" size="sm" :disabled="backtesting" @click="handleBacktest()">
-          <FlaskConical class="size-4 mr-1" :class="{ 'animate-spin': backtesting }" />回测
+      <div class="flex flex-wrap items-center gap-3">
+        <Button class="min-w-24" variant="outline" size="sm" :disabled="backtesting" @click="handleBacktest()">
+          <FlaskConical class="size-4" :class="{ 'animate-spin': backtesting }" />
+          <span>回测</span>
         </Button>
-        <Button size="sm" :disabled="training" @click="handleTrain">
-          <Loader2 v-if="training" class="size-4 mr-1 animate-spin" />
-          <Play v-else class="size-4 mr-1" />训练新模型
+        <Button class="min-w-32" size="sm" :disabled="training" @click="handleTrain">
+          <Loader2 v-if="training" class="size-4 animate-spin" />
+          <Play v-else class="size-4" />
+          <span>训练新模型</span>
         </Button>
       </div>
     </div>

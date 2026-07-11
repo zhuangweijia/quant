@@ -37,14 +37,14 @@ function handleLogout() {
 
 <template>
   <UiSidebar collapsible="icon" class="border-r">
-    <UiSidebarHeader class="border-b px-4 py-3">
+    <UiSidebarHeader class="border-b px-3 py-4 group-data-[collapsible=icon]:px-2">
       <UiSidebarMenu>
         <UiSidebarMenuItem>
-          <UiSidebarMenuButton size="lg" class="gap-3">
+          <UiSidebarMenuButton size="lg" class="gap-3 group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0">
             <div class="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
               <TrendingUp class="size-4" />
             </div>
-            <div class="grid flex-1 text-left text-sm leading-tight">
+            <div class="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
               <span class="truncate font-bold">Stock Analysis</span>
               <span class="truncate text-xs text-muted-foreground">AI 选股分析</span>
             </div>
@@ -53,8 +53,8 @@ function handleLogout() {
       </UiSidebarMenu>
     </UiSidebarHeader>
 
-    <UiSidebarContent>
-      <UiSidebarGroup>
+    <UiSidebarContent class="px-2 py-3">
+      <UiSidebarGroup class="gap-2">
         <UiSidebarGroupLabel>Workspace</UiSidebarGroupLabel>
         <UiSidebarMenu>
           <UiSidebarMenuItem v-for="item in navItems" :key="item.path">
@@ -63,7 +63,7 @@ function handleLogout() {
               :is-active="isActive(item.path)"
               :tooltip="item.title"
             >
-              <router-link :to="item.path" class="flex items-center gap-2">
+              <router-link :to="item.path" class="flex min-w-0 items-center gap-3">
                 <component :is="item.icon" class="size-4" />
                 <span>{{ item.title }}</span>
               </router-link>
@@ -73,16 +73,16 @@ function handleLogout() {
       </UiSidebarGroup>
     </UiSidebarContent>
 
-    <UiSidebarFooter class="border-t">
+    <UiSidebarFooter class="border-t px-2 py-3">
       <UiSidebarMenu>
         <UiSidebarMenuItem>
           <UiDropdownMenu>
             <UiDropdownMenuTrigger as-child>
-              <UiSidebarMenuButton size="lg" class="gap-3">
+              <UiSidebarMenuButton size="lg" class="gap-3 group-data-[collapsible=icon]:mx-auto group-data-[collapsible=icon]:size-10 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0">
                 <UiAvatar class="size-8 rounded-lg">
                   <UiAvatarFallback class="rounded-lg">{{ userInitial }}</UiAvatarFallback>
                 </UiAvatar>
-                <div class="grid flex-1 text-left text-sm leading-tight">
+                <div class="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
                   <span class="truncate font-semibold">{{ username }}</span>
                   <span class="truncate text-xs text-muted-foreground">
                     {{ authStore.role === 'admin' ? '管理员' : '用户' }}
