@@ -26,12 +26,12 @@ function openCommandMenu() {
         <Button
           variant="outline"
           size="sm"
-          class="h-9 w-11 justify-start rounded-full px-3 text-muted-foreground shadow-none sm:w-64 sm:px-4"
+          class="h-9 w-11 justify-start rounded-full px-3 text-muted-foreground shadow-none md:w-64 md:px-4"
           @click="openCommandMenu"
         >
           <Search class="size-4" />
-          <span class="hidden flex-1 text-left sm:inline">搜索...</span>
-          <kbd class="pointer-events-none hidden h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:inline-flex">
+          <span class="hidden flex-1 text-left md:inline">搜索...</span>
+          <kbd class="pointer-events-none hidden h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground md:inline-flex">
             ⌘K
           </kbd>
         </Button>

@@ -102,7 +102,7 @@ onMounted(() => fetchVersions())
 
 <template>
   <div class="space-y-6">
-    <div class="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+    <div class="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
       <div class="flex min-w-0 items-center gap-3">
         <div class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
           <BrainCircuit class="size-5" />

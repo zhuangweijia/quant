@@ -8,7 +8,8 @@ const root = resolve(__dirname, '..')
 const checks = [
   {
     file: 'src/components/layout/AppLayout.vue',
-    expected: ['h-16', 'sm:w-64', 'max-w-7xl px-5 py-7'],
+    expected: ['h-16', 'md:w-64', 'max-w-7xl px-5 py-7'],
+    forbidden: ['sm:w-64', 'sm:px-4', 'sm:inline-flex'],
   },
   {
     file: 'src/components/app-sidebar/index.vue',
@@ -28,7 +29,8 @@ const checks = [
   },
   {
     file: 'src/views/model/ModelView.vue',
-    expected: ['flex flex-col gap-5 sm:flex-row', 'min-w-32', '<span>训练新模型</span>'],
+    expected: ['flex flex-col gap-5 md:flex-row', 'min-w-32', '<span>训练新模型</span>'],
+    forbidden: ['flex flex-col gap-5 sm:flex-row'],
   },
 ]
 
@@ -40,6 +42,12 @@ for (const check of checks) {
   for (const expected of check.expected) {
     if (!contents.includes(expected)) {
       failures.push(`${check.file} is missing: ${expected}`)
+    }
+  }
+
+  for (const forbidden of check.forbidden ?? []) {
+    if (contents.includes(forbidden)) {
+      failures.push(`${check.file} still contains: ${forbidden}`)
     }
   }
 }
