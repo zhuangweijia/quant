@@ -8,8 +8,17 @@ const root = resolve(__dirname, '..')
 const checks = [
   {
     file: 'src/components/layout/AppLayout.vue',
-    expected: ['h-16', 'md:w-64', 'max-w-7xl px-5 py-7'],
-    forbidden: ['sm:w-64', 'sm:px-4', 'sm:inline-flex'],
+    expected: ['h-16', '<UiSidebarTrigger class="size-9" />', 'max-w-7xl px-5 py-7'],
+    forbidden: [
+      'CommandMenu',
+      'openCommandMenu',
+      '<Search',
+      '搜索...',
+      '⌘K',
+      'toggleTheme',
+      '<SunMedium',
+      '<MoonStar',
+    ],
   },
   {
     file: 'src/components/app-sidebar/index.vue',
