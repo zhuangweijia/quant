@@ -2,37 +2,27 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { useRiskStore } from '@/stores/risk'
 import {
   Activity,
+  BrainCircuit,
   CandlestickChart,
-  FlaskConical,
   LogOut,
   Settings2,
-  ShieldAlert,
-  Sparkles,
   TrendingUp,
-  WalletCards,
+  Trophy,
 } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
-const riskStore = useRiskStore()
 
 const navItems = [
   { title: '看板', icon: Activity, path: '/dashboard' },
+  { title: '排名表', icon: Trophy, path: '/ranking' },
   { title: '行情', icon: CandlestickChart, path: '/market' },
-  { title: '策略', icon: Sparkles, path: '/strategy', requireRole: 'trader' },
-  { title: '回测', icon: FlaskConical, path: '/backtest', requireRole: 'trader' },
-  { title: '交易', icon: WalletCards, path: '/trade', requireRole: 'trader' },
-  { title: '风控', icon: ShieldAlert, path: '/risk', requireRole: 'trader' },
+  { title: '模型', icon: BrainCircuit, path: '/model' },
   { title: '设置', icon: Settings2, path: '/settings' },
 ]
-
-const visibleNavItems = computed(() =>
-  navItems.filter(item => !item.requireRole || authStore.role !== 'viewer')
-)
 
 const isActive = (path: string) => route.path.startsWith(path)
 
@@ -55,8 +45,8 @@ function handleLogout() {
               <TrendingUp class="size-4" />
             </div>
             <div class="grid flex-1 text-left text-sm leading-tight">
-              <span class="truncate font-bold">Quant Desk</span>
-              <span class="truncate text-xs text-muted-foreground">Systematic trading</span>
+              <span class="truncate font-bold">Stock Analysis</span>
+              <span class="truncate text-xs text-muted-foreground">AI 选股分析</span>
             </div>
           </UiSidebarMenuButton>
         </UiSidebarMenuItem>
@@ -67,7 +57,7 @@ function handleLogout() {
       <UiSidebarGroup>
         <UiSidebarGroupLabel>Workspace</UiSidebarGroupLabel>
         <UiSidebarMenu>
-          <UiSidebarMenuItem v-for="item in visibleNavItems" :key="item.path">
+          <UiSidebarMenuItem v-for="item in navItems" :key="item.path">
             <UiSidebarMenuButton
               as-child
               :is-active="isActive(item.path)"
@@ -78,11 +68,6 @@ function handleLogout() {
                 <span>{{ item.title }}</span>
               </router-link>
             </UiSidebarMenuButton>
-            <UiSidebarMenuBadge
-              v-if="item.path === '/risk' && riskStore.unreadCount > 0"
-            >
-              {{ riskStore.unreadCount > 99 ? '99+' : riskStore.unreadCount }}
-            </UiSidebarMenuBadge>
           </UiSidebarMenuItem>
         </UiSidebarMenu>
       </UiSidebarGroup>
@@ -100,7 +85,7 @@ function handleLogout() {
                 <div class="grid flex-1 text-left text-sm leading-tight">
                   <span class="truncate font-semibold">{{ username }}</span>
                   <span class="truncate text-xs text-muted-foreground">
-                    {{ authStore.role === 'admin' ? '管理员' : '交易员' }}
+                    {{ authStore.role === 'admin' ? '管理员' : '用户' }}
                   </span>
                 </div>
               </UiSidebarMenuButton>

@@ -13,14 +13,12 @@ import {
 } from '@/components/ui/command'
 import {
   Activity,
+  BrainCircuit,
   CandlestickChart,
-  FlaskConical,
   MoonStar,
   Settings2,
-  ShieldAlert,
-  Sparkles,
   SunMedium,
-  WalletCards,
+  Trophy,
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -29,11 +27,9 @@ const open = ref(false)
 
 const navItems = [
   { title: '看板', icon: Activity, path: '/dashboard' },
+  { title: '排名表', icon: Trophy, path: '/ranking' },
   { title: '行情', icon: CandlestickChart, path: '/market' },
-  { title: '策略', icon: Sparkles, path: '/strategy' },
-  { title: '回测', icon: FlaskConical, path: '/backtest' },
-  { title: '交易', icon: WalletCards, path: '/trade' },
-  { title: '风控', icon: ShieldAlert, path: '/risk' },
+  { title: '模型', icon: BrainCircuit, path: '/model' },
   { title: '设置', icon: Settings2, path: '/settings' },
 ]
 

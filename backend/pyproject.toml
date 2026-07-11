@@ -1,7 +1,7 @@
 [project]
-name = "quantplatform"
-version = "1.0.0"
-description = "QuantPlatform - Multi-market quantitative trading platform"
+name = "stockanalysis"
+version = "2.0.0"
+description = "StockAnalysis - A股AI选股分析平台"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.110",
@@ -21,6 +21,10 @@ dependencies = [
     "pandas>=2.2",
     "numpy>=1.26",
     "pyyaml>=6.0",
+    "lightgbm>=4.3",
+    "shap>=0.45",
+    "scikit-learn>=1.4",
+    "pandas-ta>=0.3.14b",
 ]
 
 [project.optional-dependencies]
@@ -32,10 +36,6 @@ dev = [
     "ipython",
 ]
 akshare = ["akshare>=1.12"]
-alpaca = ["alpaca-py>=0.20"]
-binance = ["ccxt>=4.0"]
-talib = ["TA-Lib>=0.4.28"]
-all-market = ["quantplatform[akshare,alpaca,binance,talib]"]
 
 [build-system]
 requires = ["setuptools>=68.0"]

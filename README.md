@@ -1,6 +1,6 @@
-# QuantPlatform
+# StockAnalysis
 
-多市场量化交易平台 — 支持 A 股、美股、加密货币的策略开发、回测、模拟盘/实盘交易。
+A股AI选股分析平台 — 基于沪深300成分股，使用 LightGBM 多因子模型每日输出选股排名。
 
 ## 技术栈
 
@@ -8,47 +8,32 @@
 |------|------|
 | 后端 | FastAPI + SQLAlchemy 2.0 (async) + PostgreSQL + Redis |
 | 前端 | Vue 3 + TypeScript + Vite + Tailwind CSS + ECharts |
-| 交易 | PaperBroker / Alpaca (美股) / Binance (加密货币) |
-| 行情 | AKShare (A股) / Alpaca Market Data / Binance WebSocket |
+| 数据源 | AKShare (A股日K线 / 基本面 / 北向资金) |
+| ML | LightGBM + SHAP + pandas-ta |
 | 部署 | Docker Compose |
 
 ## 功能模块
 
-- **看板 (Dashboard)** — 总资产、权益曲线、日盈亏、持仓分布、策略表现
-- **行情中心** — K 线图、实时报价、自选股、多时间周期、技术指标叠加
-- **策略管理** — 策略 CRUD、策略执行引擎、代码编辑器、策略模板、运行日志
-- **回测引擎** — 加载用户策略代码、模拟撮合、收益/回撤/夏普等指标、可视化报告
-- **交易系统** — 手动/策略自动下单、订单管理、持仓查询、券商适配器
-- **风控系统** — 止损/止盈、持仓限额、日亏损限制、自动强平、告警通知
-- **系统设置** — 券商 API 配置、交易模式切换、通知配置、参数管理
-- **实时通信** — WebSocket 推送行情、订单、持仓、风控告警
+- **看板 (Dashboard)** — Pipeline 状态、今日强推 Top 10、市场概览
+- **排名表 (Ranking)** — 全市场评分排名（强推/关注/观望/回避），支持标签筛选和分页
+- **个股详情 (Stock Detail)** — 评分明细、SHAP 因素拆解（大白话）、K线图、基本面、北向资金
+- **模型管理 (Model)** — 模型训练、激活、版本列表、分组回测验证
+- **分析 Pipeline** — 收盘后自动执行：数据同步 → 特征计算 → 模型预测 → SHAP解释 → 排名生成
+- **行情 (Market)** — 股票搜索、K线图（简化版）
 
-## 项目结构
+## 分析引擎架构
 
 ```
-quant/
-├── docker-compose.yml
-├── backend/                 # FastAPI 后端
-│   ├── pyproject.toml
-│   ├── alembic/             # 数据库迁移
-│   └── app/
-│       ├── main.py          # 应用入口
-│       ├── config.py        # 配置
-│       ├── database.py      # 数据库连接
-│       ├── api/v1/          # REST API 路由
-│       ├── ws/              # WebSocket
-│       ├── models/          # SQLAlchemy 模型
-│       ├── schemas/         # Pydantic Schema
-│       ├── services/        # 业务逻辑
-│       └── core/            # 事件总线、异常、类型
-└── frontend/                # Vue 3 前端
-    ├── package.json
-    └── src/
-        ├── views/           # 页面
-        ├── components/      # 组件
-        ├── stores/          # Pinia 状态管理
-        ├── api/             # API 封装
-        └── router/          # 路由
+每日收盘后:
+  数据同步 (AKShare → PostgreSQL)
+       ↓
+  特征计算 (6大类 ~30个因子: 动量/估值/质量/成长/量价/技术/资金流)
+       ↓
+  LightGBM 预测 (跨截面收益预测 → 评分 0~1)
+       ↓
+  SHAP 解释 (Top3 正向 + Top2 负向因素 → 大白话)
+       ↓
+  排名生成 (Top10% 强推 / Bottom10% 回避)
 ```
 
 ## 快速开始
@@ -61,7 +46,7 @@ quant/
 - PostgreSQL 16
 - Redis 7
 
-### 使用 Docker Compose 一键启动
+### 使用 Docker Compose 启动
 
 ```bash
 docker compose up -d
@@ -71,55 +56,71 @@ docker compose up -d
 - 后端 API: http://localhost:8000
 - API 文档: http://localhost:8000/api/docs
 
-### 本地开发
-
-**后端**
+### 首次数据初始化
 
 ```bash
 cd backend
-python -m venv venv
-source venv/bin/activate
-pip install -e ".[dev,all-market]"
-cp .env.example .env   # 编辑配置
-alembic upgrade head
-uvicorn app.main:app --reload --port 8000
+python scripts/bootstrap_data.py   # 拉取沪深300历史数据 (~30-60分钟)
 ```
 
-**前端**
+### 训练第一个模型
 
-```bash
-cd frontend
-npm install
-npm run dev
+1. 打开 http://localhost:3000/model
+2. 点击「训练新模型」
+3. 训练完成后查看 IC 指标
+4. IC 达标后点击「激活」
+
+## 项目结构
+
+```
+quant/
+├── docker-compose.yml
+├── backend/
+│   ├── pyproject.toml
+│   ├── alembic/             # 数据库迁移
+│   ├── scripts/
+│   │   └── bootstrap_data.py  # 首次数据拉取
+│   ├── models/              # LightGBM 模型文件
+│   └── app/
+│       ├── main.py          # 应用入口
+│       ├── config.py        # 配置
+│       ├── api/v1/          # REST API 路由
+│       ├── ws/              # WebSocket
+│       ├── models/          # SQLAlchemy 模型
+│       ├── schemas/         # Pydantic Schema
+│       └── services/        # 业务逻辑
+│           ├── data_sync_service.py     # AKShare 数据同步
+│           ├── feature_engine.py        # 特征工程
+│           ├── ml_model.py              # LightGBM 训练/预测/SHAP
+│           ├── ranking_service.py       # 排名生成
+│           ├── model_validation_service.py  # 回测验证
+│           └── analysis_pipeline.py     # 每日 Pipeline 编排
+└── frontend/
+    └── src/
+        ├── views/
+        │   ├── dashboard/    # 看板
+        │   ├── ranking/      # 排名表
+        │   ├── stock-detail/ # 个股详情
+        │   ├── model/        # 模型管理
+        │   ├── market/       # 行情
+        │   └── settings/     # 设置
+        ├── api/              # API 封装
+        └── router/           # 路由
 ```
 
 ### 配置
 
-后端配置通过环境变量或 `.env` 文件注入，主要配置项：
+主要配置项（`.env`）：
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| `DATABASE_URL` | `postgresql+asyncpg://quant:quant@localhost:5432/quant` | 数据库连接 |
+| `DATABASE_URL` | `postgresql+asyncpg://...` | 数据库连接 |
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis 连接 |
-| `TRADING_MODE` | `paper` | 交易模式 (paper / live) |
-| `JWT_PRIVATE_KEY_PATH` | `keys/private.pem` | JWT RSA 私钥 |
-| `JWT_PUBLIC_KEY_PATH` | `keys/public.pem` | JWT RSA 公钥 |
-| `ENCRYPTION_KEY` | — | API Key 加密密钥 |
-| `LOG_LEVEL` | `INFO` | 日志级别 |
-
-## API 文档
-
-启动后端后访问：
-
-- Swagger UI: `/api/docs`
-- ReDoc: `/api/redoc`
-
-## 开发规范
-
-- **后端**: Python 3.11+、async/await、Ruff 格式化、structlog 结构化日志
-- **前端**: Vue 3 Composition API + `<script setup>`、TypeScript strict mode
-- **Git**: `type(scope): message` 格式，如 `feat(strategy): add MA crossover strategy`
-- **数据库变更**: 使用 Alembic 管理迁移
+| `STOCK_UNIVERSE` | `csi300` | 股票池 |
+| `ANALYSIS_TIME` | `17:00` | Pipeline 执行时间 |
+| `MODEL_DIR` | `models` | 模型文件目录 |
+| `FORWARD_RETURN_DAYS` | `5` | 标签预测窗口 |
+| `MODEL_IC_THRESHOLD` | `0.02` | 激活门禁 IC 阈值 |
 
 ## License
 

@@ -11,13 +11,9 @@ logger = structlog.get_logger()
 
 
 class EventBus:
-    TOPIC_BAR = "market:bar"
-    TOPIC_TICK = "market:tick"
-    TOPIC_ORDER_UPDATE = "trade:order"
-    TOPIC_TRADE_FILL = "trade:fill"
-    TOPIC_RISK_ALERT = "risk:alert"
-    TOPIC_STRATEGY_LOG = "strategy:log"
-    TOPIC_BACKTEST_PROGRESS = "backtest:progress"
+    TOPIC_ANALYSIS_PROGRESS = "analysis:progress"
+    TOPIC_RANKING_READY = "analysis:ranking_ready"
+    TOPIC_DATA_SYNC_ALERT = "data_sync:alert"
 
     def __init__(self):
         self._redis: aioredis.Redis | None = None

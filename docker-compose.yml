@@ -12,14 +12,17 @@ services:
       - JWT_PRIVATE_KEY_PATH=keys/private.pem
       - JWT_PUBLIC_KEY_PATH=keys/public.pem
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
-      - TRADING_MODE=${TRADING_MODE:-paper}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - DEBUG=false
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - STOCK_UNIVERSE=${STOCK_UNIVERSE:-csi300}
+      - ANALYSIS_TIME=${ANALYSIS_TIME:-17:00}
+      - MODEL_DIR=${MODEL_DIR:-models}
     volumes:
       - backend-keys:/app/keys
+      - backend-models:/app/models
     networks:
       - frontend-net
       - backend-net
@@ -114,3 +117,4 @@ volumes:
   pgdata:
   redisdata:
   backend-keys:
+  backend-models:

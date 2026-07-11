@@ -11,24 +11,12 @@ logger = structlog.get_logger()
 
 _EXEMPT_PATHS = {"/health", "/api/docs", "/api/redoc", "/api/openapi.json", "/docs", "/redoc"}
 
-_TRADE_PREFIX = "/api/v1/trade/"
-_BACKTEST_RUN = "/api/v1/backtest/run"
-
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    def __init__(self, app, default_limit: int = 60, trade_limit: int = 10, backtest_limit: int = 3):
+    def __init__(self, app, default_limit: int = 60):
         super().__init__(app)
         self.default_limit = default_limit
-        self.trade_limit = trade_limit
-        self.backtest_limit = backtest_limit
         self._windows: dict[str, list[float]] = defaultdict(list)
-
-    def _get_limit_for_path(self, path: str) -> int:
-        if path.startswith(_TRADE_PREFIX):
-            return self.trade_limit
-        if path == _BACKTEST_RUN:
-            return self.backtest_limit
-        return self.default_limit
 
     def _get_client_id(self, request: Request) -> str:
         auth_header = request.headers.get("Authorization", "")
@@ -36,9 +24,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return f"token:{auth_header[7:20]}"
         return f"ip:{request.client.host if request.client else 'unknown'}"
 
-    def _check_rate(self, client_id: str, path: str) -> tuple[bool, int, int, int]:
+    def _check_rate(self, client_id: str) -> tuple[bool, int, int, int]:
         now = time.time()
-        limit = self._get_limit_for_path(path)
+        limit = self.default_limit
         key = f"{client_id}:{limit}"
         window = self._windows[key]
 
@@ -59,7 +47,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_id = self._get_client_id(request)
-        allowed, limit, remaining, reset_time = self._check_rate(client_id, path)
+        allowed, limit, remaining, reset_time = self._check_rate(client_id)
 
         if not allowed:
             logger.warning("rate_limit.exceeded", client_id=client_id, path=path)

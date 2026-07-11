@@ -42,11 +42,9 @@ async def lifespan(app: FastAPI):
         logger.warning("event_bus.connect_failed", error=str(e))
 
     for topic in [
-        event_bus.TOPIC_ORDER_UPDATE,
-        event_bus.TOPIC_TRADE_FILL,
-        event_bus.TOPIC_RISK_ALERT,
-        event_bus.TOPIC_STRATEGY_LOG,
-        event_bus.TOPIC_BACKTEST_PROGRESS,
+        event_bus.TOPIC_ANALYSIS_PROGRESS,
+        event_bus.TOPIC_RANKING_READY,
+        event_bus.TOPIC_DATA_SYNC_ALERT,
     ]:
         try:
             await event_bus.subscribe(
@@ -56,18 +54,18 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("event_bus.subscribe_failed", topic=topic, error=str(e))
 
-    from app.services.strategy_engine import strategy_engine
-    strategy_engine.start()
+    from app.services.analysis_pipeline import analysis_pipeline
+    analysis_pipeline.start()
     yield
-    strategy_engine.stop()
+    analysis_pipeline.stop()
     await event_bus.disconnect()
     await close_db()
     logger.info("app.stopped")
 
 
 app = FastAPI(
-    title="QuantPlatform API",
-    version="1.0.0",
+    title="StockAnalysis API",
+    version="2.0.0",
     lifespan=lifespan,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -87,8 +85,6 @@ app.add_middleware(
 app.add_middleware(
     RateLimitMiddleware,
     default_limit=settings.RATE_LIMIT_PER_MINUTE,
-    trade_limit=settings.RATE_LIMIT_TRADE_PER_MINUTE,
-    backtest_limit=3,
 )
 
 app.include_router(v1_router, prefix=settings.API_PREFIX)

@@ -8,17 +8,15 @@ import structlog
 logger = structlog.get_logger()
 
 _DEFAULT_PARAMS = {
-    "max_strategies_per_user": "50",
-    "max_running_strategies": "10",
-    "max_concurrent_backtests": "3",
-    "backtest_timeout": "600",
-    "order_timeout": "30",
-    "paper_initial_capital": "1000000",
-    "default_commission_a_stock": "0.00025",
-    "default_commission_us_stock": "0.005",
-    "default_commission_crypto": "0.001",
-    "data_retention_days": "30",
+    "data_retention_days": "90",
     "alert_retention_days": "90",
+    "model_train_window_days": "756",
+    "model_val_window_days": "126",
+    "forward_return_days": "5",
+    "forward_return_threshold": "0.02",
+    "model_ic_threshold": "0.02",
+    "stock_universe": "csi300",
+    "analysis_time": "17:00",
 }
 
 

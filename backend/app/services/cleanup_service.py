@@ -25,10 +25,10 @@ async def run_cleanup():
             log_retention = data_retention
 
             tables_config = [
-                ("strategy_logs", "app.models.strategy_log", "StrategyLog", log_retention),
                 ("alerts", "app.models.alert", "Alert", alert_retention),
                 ("notification_logs", "app.models.notification_log", "NotificationLog", log_retention),
                 ("market_data", "app.models.market_data", "MarketData", data_retention),
+                ("audit_logs", "app.models.audit_log", "AuditLog", log_retention),
             ]
 
             for table_name, module_path, class_name, retention_days in tables_config:

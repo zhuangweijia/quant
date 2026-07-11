@@ -12,7 +12,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 
 from app.models.base import Base
-from app.models import User, Strategy, Order, Position, MarketData, BacktestResult, RiskRule, Alert
+from app.models import (  # noqa: F401 — ensure all models are loaded for autogenerate
+    User, MarketData, Alert, UserWatchlist, Setting,
+    NotificationLog, AuditLog, Stock, DailyBar, StockFactor,
+    Prediction, ModelVersion, AnalysisRun,
+)
 
 config = context.config
 

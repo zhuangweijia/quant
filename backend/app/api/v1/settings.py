@@ -8,17 +8,6 @@ from app.services.audit_service import log_action, extract_request_info
 router = APIRouter()
 
 
-class BrokerConfigRequest(BaseModel):
-    api_key: str = ""
-    api_secret: str = ""
-    params: dict | None = None
-
-
-class TradingModeRequest(BaseModel):
-    mode: str
-    password: str | None = None
-
-
 class NotificationConfigRequest(BaseModel):
     email_enabled: bool = False
     email_smtp_host: str = ""
@@ -41,120 +30,6 @@ class PasswordChangeRequest(BaseModel):
 
 class SystemParamsRequest(BaseModel):
     params: dict
-
-
-@router.get("/brokers", response_model=ResponseBase[list[dict]])
-async def get_brokers(user: CurrentUser, db: DBSession):
-    from app.services.settings_service import get_settings_category
-    binance_config = await get_settings_category(db, user.id, "broker:binance")
-    alpaca_config = await get_settings_category(db, user.id, "broker:alpaca")
-
-    import json
-    binance_extra = binance_config.get("extra_params", "{}")
-    try:
-        binance_params = json.loads(binance_extra) if isinstance(binance_extra, str) else binance_extra
-    except (json.JSONDecodeError, TypeError):
-        binance_params = {}
-
-    brokers = [
-        {
-            "broker_name": "binance",
-            "market": "crypto",
-            "api_key": binance_config.get("api_key") or "",
-            "has_secret": bool(binance_config.get("api_secret")),
-            "params": {
-                "testnet": binance_params.get("testnet", False),
-                "network": binance_params.get("network", "mainnet"),
-            },
-            "connected": False,
-        },
-        {
-            "broker_name": "alpaca",
-            "market": "us_stock",
-            "api_key": alpaca_config.get("api_key") or "",
-            "has_secret": bool(alpaca_config.get("api_secret")),
-            "params": {"environment": alpaca_config.get("environment", "paper")},
-            "connected": False,
-        },
-        {
-            "broker_name": "akshare",
-            "market": "a_stock",
-            "api_key": "",
-            "has_secret": False,
-            "params": {},
-            "connected": True,
-        },
-    ]
-    return ResponseBase(data=brokers)
-
-
-@router.put("/brokers/{broker_name}", response_model=ResponseBase[dict])
-async def save_broker_config(
-    user: CurrentUser, db: DBSession, broker_name: str, payload: BrokerConfigRequest, request: Request
-):
-    if broker_name not in ("binance", "alpaca", "akshare"):
-        raise HTTPException(status_code=400, detail="不支持的交易所")
-
-    from app.services.settings_service import set_setting
-    category = f"broker:{broker_name}"
-    if payload.api_key:
-        await set_setting(db, user.id, category, "api_key", payload.api_key, encrypted=True)
-    if payload.api_secret:
-        await set_setting(db, user.id, category, "api_secret", payload.api_secret, encrypted=True)
-    if payload.params:
-        import json
-        await set_setting(db, user.id, category, "extra_params", json.dumps(payload.params))
-
-    from app.services.trade.broker_factory import invalidate_broker_cache
-    invalidate_broker_cache(user.id, broker_name)
-
-    ip, ua = extract_request_info(request)
-    await log_action(db, user_id=user.id, action="settings.broker_update", resource_type="broker", resource_id=broker_name, detail={"broker_name": broker_name}, ip_address=ip, user_agent=ua)
-
-    return ResponseBase(data={"broker_name": broker_name, "saved": True})
-
-
-@router.post("/brokers/{broker_name}/test", response_model=ResponseBase[dict])
-async def test_broker_connection(user: CurrentUser, db: DBSession, broker_name: str):
-    if broker_name not in ("binance", "alpaca", "akshare"):
-        raise HTTPException(status_code=400, detail="不支持的交易所")
-
-    from app.services.trade.broker_factory import test_broker_connection as do_test
-    result = await do_test(db, user.id, broker_name)
-    return ResponseBase(data=result)
-
-
-@router.get("/trading-mode", response_model=ResponseBase[dict])
-async def get_trading_mode(user: CurrentUser, db: DBSession):
-    from app.services.account_service import get_or_create_account
-    account = await get_or_create_account(db, user.id)
-    return ResponseBase(data={"mode": account.mode})
-
-
-@router.put("/trading-mode", response_model=ResponseBase[dict])
-async def set_trading_mode(user: CurrentUser, db: DBSession, payload: TradingModeRequest, request: Request):
-    if payload.mode not in ("paper", "live"):
-        raise HTTPException(status_code=400, detail="无效的交易模式")
-    if payload.mode == "live" and not payload.password:
-        raise HTTPException(status_code=400, detail="切换到实盘需要输入密码验证")
-
-    if payload.password:
-        from app.services.auth_service import AuthService
-        from app.models.user import User
-        db_user = await db.get(User, user.id)
-        if not db_user or not AuthService.verify_password(payload.password, db_user.hashed_password):
-            raise HTTPException(status_code=400, detail="密码不正确")
-
-    from app.services.account_service import get_or_create_account
-    account = await get_or_create_account(db, user.id)
-    old_mode = account.mode
-    account.mode = payload.mode
-    await db.flush()
-
-    ip, ua = extract_request_info(request)
-    await log_action(db, user_id=user.id, action="settings.trading_mode_change", detail={"old_mode": old_mode, "new_mode": payload.mode}, ip_address=ip, user_agent=ua)
-
-    return ResponseBase(data={"mode": account.mode})
 
 
 @router.get("/notifications", response_model=ResponseBase[dict])
@@ -204,14 +79,14 @@ async def save_notifications(user: CurrentUser, db: DBSession, payload: Notifica
 @router.post("/notifications/test-email", response_model=ResponseBase[dict])
 async def test_email(user: CurrentUser, db: DBSession):
     from app.services.notification_service import send_email
-    success = await send_email(db, user.id, "QuantPlatform 测试邮件", "<h2>测试成功</h2><p>邮件通知配置正常。</p>")
+    success = await send_email(db, user.id, "StockAnalysis 测试邮件", "<h2>测试成功</h2><p>邮件通知配置正常。</p>")
     return ResponseBase(data={"sent": success})
 
 
 @router.post("/notifications/test-webhook", response_model=ResponseBase[dict])
 async def test_webhook(user: CurrentUser, db: DBSession):
     from app.services.notification_service import send_webhook
-    success = await send_webhook(db, user.id, "test", {"message": "QuantPlatform Webhook 测试"})
+    success = await send_webhook(db, user.id, "test", {"message": "StockAnalysis Webhook 测试"})
     return ResponseBase(data={"sent": success})
 
 
@@ -225,11 +100,13 @@ async def get_params(user: CurrentUser, db: DBSession):
 
 
 @router.put("/params", response_model=ResponseBase[dict])
-async def save_params(user: CurrentUser, db: DBSession, payload: SystemParamsRequest):
+async def save_params(user: CurrentUser, db: DBSession, payload: SystemParamsRequest, request: Request):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可操作系统参数")
     from app.services.settings_service import save_system_params
     params = await save_system_params(db, payload.params)
+    ip, ua = extract_request_info(request)
+    await log_action(db, user_id=user.id, action="settings.params_update", detail=params, ip_address=ip, user_agent=ua)
     return ResponseBase(data=params)
 
 
