@@ -15,11 +15,12 @@ from datetime import date, datetime, timezone
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.events import event_bus
 from app.database import AsyncSessionLocal
 from app.models.analysis_run import AnalysisRun
+from app.models.prediction import Prediction
 
 logger = structlog.get_logger()
 
@@ -67,6 +68,10 @@ class AnalysisPipeline:
         asyncio.create_task(self._run_pipeline(run_id, trigger_type))
         return run_id
 
+    async def run_and_wait(self, trigger_type: str = "manual") -> dict:
+        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        return await self._run_pipeline(run_id, trigger_type)
+
     async def _scheduled_run(self):
         if not _is_trading_day():
             logger.info("analysis_pipeline.skipped_non_trading_day")
@@ -112,7 +117,12 @@ class AnalysisPipeline:
                                        error=f"Stage '{stage}' failed: {e}")
                 await self._publish_progress(stage, "failed")
                 self._current_run_id = None
-                return
+                return {
+                    "run_id": run_id,
+                    "status": "failed",
+                    "prediction_count": 0,
+                    "error": f"Stage '{stage}' failed: {e}",
+                }
 
         await self._update_run(run_id, status="done", finished_at=datetime.now(timezone.utc))
         await event_bus.publish(event_bus.TOPIC_RANKING_READY, {
@@ -120,6 +130,17 @@ class AnalysisPipeline:
         })
         logger.info("analysis_pipeline.completed", run_id=run_id)
         self._current_run_id = None
+        async with AsyncSessionLocal() as db:
+            prediction_count = await db.scalar(
+                select(func.count(Prediction.id)).where(
+                    Prediction.trade_date == date.today()
+                )
+            )
+        return {
+            "run_id": run_id,
+            "status": "done",
+            "prediction_count": prediction_count or 0,
+        }
 
     async def _execute_stage(self, stage: str):
         if stage == "data_sync":
