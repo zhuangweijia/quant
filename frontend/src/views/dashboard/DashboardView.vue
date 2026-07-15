@@ -1,20 +1,37 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { toast } from 'vue-sonner'
+
+import type { SetupStatus } from '@/api/setup'
+import { setupApi } from '@/api/setup'
 import { rankingApi } from '@/api/ranking'
 import { analysisApi } from '@/api/analysis'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useAuthStore } from '@/stores/auth'
 import {
   Card as UiCard, CardContent as UiCardContent, CardHeader as UiCardHeader,
   CardTitle as UiCardTitle,
 } from '@/components/ui/card'
 import Badge from '@/components/ui/badge/Badge.vue'
 import { Activity, Trophy, BrainCircuit, AlertCircle, Loader2 } from 'lucide-vue-next'
+import SetupStatusCard from './SetupStatusCard.vue'
+import { getSetupPresentation } from './setup-state'
+import { useSetupPolling } from './useSetupPolling'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const topStocks = ref<any[]>([])
 const analysisStatus = ref<any>(null)
+const setupStatus = ref<SetupStatus | null>(null)
 const loading = ref(true)
+const startingSetup = ref(false)
+const triggeringAnalysis = ref(false)
+
+const isAdmin = computed(() => authStore.role === 'admin')
+const analysisRunning = computed(() => (
+  triggeringAnalysis.value || analysisStatus.value?.status === 'running'
+))
 
 const stages = [
   { key: 'data_sync', label: '数据同步' },
@@ -35,12 +52,26 @@ const pipelineProgress = computed(() => {
 async function fetchData() {
   loading.value = true
   try {
-    const [rankingRes, statusRes] = await Promise.all([
+    const [rankingResult, analysisResult, setupResult] = await Promise.allSettled([
       rankingApi.getRankings({ date: 'today', label: '强推', page: 1, size: 10 }),
       analysisApi.getStatus(),
+      setupApi.getStatus(),
     ])
-    topStocks.value = rankingRes.data.data.items
-    analysisStatus.value = statusRes.data.data
+
+    if (rankingResult.status === 'fulfilled') {
+      topStocks.value = rankingResult.value.data.data?.items ?? []
+    }
+    if (analysisResult.status === 'fulfilled') {
+      analysisStatus.value = analysisResult.value.data.data
+    }
+    if (setupResult.status === 'fulfilled' && setupResult.value.data.data) {
+      setupStatus.value = setupResult.value.data.data
+      setupPolling.sync(setupStatus.value)
+    }
+
+    for (const result of [rankingResult, analysisResult, setupResult]) {
+      if (result.status === 'rejected') console.error('Dashboard request failed', result.reason)
+    }
   } catch (e) {
     console.error('Dashboard fetch failed', e)
   } finally {
@@ -48,13 +79,69 @@ async function fetchData() {
   }
 }
 
+async function fetchSetupStatus(): Promise<SetupStatus> {
+  const response = await setupApi.getStatus()
+  if (!response.data.data) throw new Error('首次配置状态响应为空')
+  return response.data.data
+}
+
+function handlePolledSetupStatus(status: SetupStatus) {
+  const wasInitializing = setupStatus.value?.readiness === 'initializing'
+  setupStatus.value = status
+  if (wasInitializing && status.readiness !== 'initializing') void fetchData()
+}
+
+const setupPolling = useSetupPolling(fetchSetupStatus, handlePolledSetupStatus)
+
+async function handleStartSetup() {
+  if (startingSetup.value) return
+  startingSetup.value = true
+  try {
+    await setupApi.start()
+    toast.success(setupStatus.value?.readiness === 'failed' ? '已继续初始化' : '首次配置已启动')
+    setupStatus.value = await fetchSetupStatus()
+    setupPolling.sync(setupStatus.value)
+  } catch (error: any) {
+    toast.error(error?.response?.data?.detail || '启动首次配置失败')
+  } finally {
+    startingSetup.value = false
+  }
+}
+
+async function handleRunAnalysis() {
+  if (triggeringAnalysis.value) return
+  triggeringAnalysis.value = true
+  try {
+    await analysisApi.trigger()
+    toast.success('今日分析已启动')
+    const response = await analysisApi.getStatus()
+    analysisStatus.value = response.data.data
+  } catch (error: any) {
+    toast.error(error?.response?.data?.detail || '启动今日分析失败')
+  } finally {
+    triggeringAnalysis.value = false
+  }
+}
+
+const emptyMessage = computed(() => {
+  if (!setupStatus.value) return '正在读取推荐系统状态...'
+  return getSetupPresentation(setupStatus.value, analysisStatus.value).emptyMessage
+})
+
 const { subscribe, onMessage } = useWebSocket()
 const cleanups: (() => void)[] = []
 onMounted(() => {
   fetchData()
   subscribe('analysis:progress', 'analysis:ranking_ready')
   cleanups.push(onMessage('analysis:ranking_ready', () => fetchData()))
-  cleanups.push(onMessage('analysis:progress', () => analysisApi.getStatus().then(r => analysisStatus.value = r.data.data)))
+  cleanups.push(onMessage('analysis:progress', () => analysisApi.getStatus().then((response) => {
+    analysisStatus.value = response.data.data
+  })))
+})
+
+onUnmounted(() => {
+  setupPolling.stop()
+  cleanups.forEach(cleanup => cleanup())
 })
 
 function stageStatus(key: string): string {
@@ -67,6 +154,17 @@ function stageStatus(key: string): string {
     <h1 class="text-2xl font-bold flex items-center gap-2">
       <Activity class="size-6 text-primary" />市场概览
     </h1>
+
+    <SetupStatusCard
+      v-if="setupStatus"
+      :status="setupStatus"
+      :is-admin="isAdmin"
+      :starting="startingSetup"
+      :analysis-running="analysisRunning"
+      @start="handleStartSetup"
+      @run-analysis="handleRunAnalysis"
+      @open-model="router.push('/model')"
+    />
 
     <!-- Pipeline Status -->
     <UiCard v-if="analysisStatus && analysisStatus.status !== 'idle'">
@@ -109,7 +207,7 @@ function stageStatus(key: string): string {
       <UiCardContent>
         <div v-if="loading" class="py-8 text-center text-muted-foreground">加载中...</div>
         <div v-else-if="!topStocks.length" class="py-8 text-center text-muted-foreground">
-          暂无推荐数据，请先运行分析 Pipeline
+          {{ emptyMessage }}
         </div>
         <div v-else class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <div

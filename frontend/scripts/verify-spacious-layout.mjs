@@ -41,6 +41,19 @@ const checks = [
     expected: ['flex flex-col gap-5 md:flex-row', 'min-w-32', '<span>训练新模型</span>'],
     forbidden: ['flex flex-col gap-5 sm:flex-row'],
   },
+  {
+    file: 'src/views/dashboard/DashboardView.vue',
+    expected: ['<SetupStatusCard', '{{ emptyMessage }}', '@run-analysis="handleRunAnalysis"'],
+    forbidden: ['暂无推荐数据，请先运行分析 Pipeline'],
+  },
+  {
+    file: 'src/views/dashboard/SetupStatusCard.vue',
+    expected: ['data-testid="setup-primary-action"', '<Progress :model-value="progress" />'],
+  },
+  {
+    file: 'src/views/dashboard/setup-state.ts',
+    expected: ['一键初始化并生成推荐', '运行今日分析', '未产生符合条件的强推股票'],
+  },
 ]
 
 const failures = []
