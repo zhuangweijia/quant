@@ -10,7 +10,7 @@ from sqlalchemy import text
 from app.api.v1 import router as v1_router
 from app.config import get_settings
 from app.core.events import event_bus
-from app.core.exceptions import AppException
+from app.core.exceptions import AppError
 from app.core.validation import validate_config
 from app.database import AsyncSessionLocal, close_db, init_db
 from app.middleware.rate_limit import RateLimitMiddleware
@@ -101,8 +101,8 @@ app.include_router(v1_router, prefix=settings.API_PREFIX)
 app.include_router(ws_router)
 
 
-@app.exception_handler(AppException)
-async def app_exception_handler(request: Request, exc: AppException):
+@app.exception_handler(AppError)
+async def app_exception_handler(request: Request, exc: AppError):
     return JSONResponse(
         status_code=exc.code if exc.code < 500 else 400,
         content={

@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Market(str, Enum):
+class Market(StrEnum):
     A_STOCK = "a_stock"
 
 
-class Timeframe(str, Enum):
+class Timeframe(StrEnum):
     D1 = "1d"
     W1 = "1w"
 
