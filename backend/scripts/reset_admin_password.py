@@ -47,11 +47,13 @@ async def main():
                 user.hashed_password = AuthService.hash_password(new_password)
                 await session.commit()
                 print(
-                    "Admin password was a known weak default. Reset to env ADMIN_PASSWORD (default: Admin@2024)"
+                    "Admin password was a known weak default. Reset to env ADMIN_PASSWORD "
+                    "(default: Admin@2024)"
                 )
             else:
                 print(
-                    "Admin password has been manually changed. Skipping. Use --force to force reset."
+                    "Admin password has been manually changed. Skipping. "
+                    "Use --force to force reset."
                 )
 
     await engine.dispose()
