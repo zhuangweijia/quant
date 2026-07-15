@@ -27,6 +27,9 @@
 - Modify: `backend/tests/**/*.py`
 - Modify: `backend/scripts/*.py`
 - Modify: `backend/alembic/**/*.py`
+- Exclude from autofix: `backend/app/core/__init__.py`
+- Exclude from autofix: `backend/app/schemas/__init__.py`
+- Exclude from autofix: `backend/app/models/__init__.py`
 
 **Interfaces:**
 - Consumes: the current Ruff configuration in `backend/pyproject.toml` and the recorded 358-finding baseline.
@@ -49,11 +52,14 @@ Run:
 
 ```bash
 cd backend
-.venv/bin/ruff check --fix app tests scripts alembic
+.venv/bin/ruff check --fix app tests scripts alembic \
+  --exclude app/core/__init__.py \
+  --exclude app/schemas/__init__.py \
+  --exclude app/models/__init__.py
 .venv/bin/ruff format app tests scripts alembic
 ```
 
-Do not pass `--unsafe-fixes`. Review `git diff --stat` and `git diff --check` immediately afterward.
+Do not pass `--unsafe-fixes`. The three package `__init__.py` files are intentionally excluded from autofix because their imports are public exports or SQLAlchemy registration side effects; Task 2 handles them with contract tests and explicit `__all__` declarations. Formatting may still normalize their whitespace without deleting imports. Review `git diff --stat` and `git diff --check` immediately afterward.
 
 - [ ] **Step 3: Verify mechanical changes preserve current behavior**
 
