@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "test:login-copy": "node scripts/verify-login-copy.mjs",
     "test:layout": "node scripts/verify-spacious-layout.mjs",
     "preview": "vite preview"
   },

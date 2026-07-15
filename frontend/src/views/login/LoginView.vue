@@ -83,25 +83,25 @@ const onSubmit = handleSubmit(async (values) => {
   <div class="min-h-screen flex items-center justify-center p-6 bg-background">
     <div class="w-full max-w-5xl grid lg:grid-cols-2 gap-8 items-center">
       <div class="hidden lg:flex flex-col gap-6">
-        <Badge variant="outline" class="w-fit">Trading workspace</Badge>
+        <Badge variant="outline" class="w-fit">每日智能选股</Badge>
         <h1 class="text-5xl font-bold tracking-tight leading-tight">
           Quant Desk
         </h1>
         <p class="text-muted-foreground text-lg max-w-md">
-          面向多市场量化交易的统一控制台。把策略、回测、执行和风控放进一套更干净的操作界面里。
+          每日分析沪深 300，筛出值得关注的股票，并用简单清楚的理由解释每一次推荐。
         </p>
         <div class="grid grid-cols-3 gap-3 mt-4">
           <div class="rounded-lg border p-4">
-            <p class="text-xs text-muted-foreground uppercase tracking-wider mb-2">Markets</p>
-            <p class="text-sm font-semibold">A股 / US / Crypto</p>
+            <p class="text-xs text-muted-foreground uppercase tracking-wider mb-2">股票池</p>
+            <p class="text-sm font-semibold">沪深 300</p>
           </div>
           <div class="rounded-lg border p-4">
-            <p class="text-xs text-muted-foreground uppercase tracking-wider mb-2">Latency</p>
-            <p class="text-sm font-semibold">&lt; 150 ms routing</p>
+            <p class="text-xs text-muted-foreground uppercase tracking-wider mb-2">更新频率</p>
+            <p class="text-sm font-semibold">每个交易日</p>
           </div>
           <div class="rounded-lg border p-4">
-            <p class="text-xs text-muted-foreground uppercase tracking-wider mb-2">Risk</p>
-            <p class="text-sm font-semibold">Rules + alerts</p>
+            <p class="text-xs text-muted-foreground uppercase tracking-wider mb-2">分析结果</p>
+            <p class="text-sm font-semibold">强推 · 观望 · 回避</p>
           </div>
         </div>
       </div>
@@ -113,10 +113,10 @@ const onSubmit = handleSubmit(async (values) => {
             <span class="font-bold">Quant Desk</span>
           </div>
           <UiCardTitle class="text-2xl">
-            {{ isRegister ? '创建交易工作区账户' : '登录你的交易工作台' }}
+            {{ isRegister ? '创建 Quant Desk 账户' : '登录 Quant Desk' }}
           </UiCardTitle>
           <UiCardDescription>
-            {{ isRegister ? '先完成身份创建，再进入量化控制台。' : '继续访问策略、行情、交易与风控模块。' }}
+            {{ isRegister ? '创建账户，开始查看每日选股分析。' : '查看今日选股结果、股票排名与推荐理由。' }}
           </UiCardDescription>
         </UiCardHeader>
         <UiCardContent>
@@ -172,7 +172,7 @@ const onSubmit = handleSubmit(async (values) => {
             </div>
 
             <Button type="submit" size="lg" :loading="loading" class="w-full">
-              <span>{{ isRegister ? '创建账户' : '进入控制台' }}</span>
+              <span>{{ isRegister ? '创建账户' : '查看今日选股' }}</span>
               <ArrowRight class="ml-2 size-4" />
             </Button>
           </form>
