@@ -15,7 +15,7 @@ from app.models.base import Base
 from app.models import (  # noqa: F401 — ensure all models are loaded for autogenerate
     User, MarketData, Alert, UserWatchlist, Setting,
     NotificationLog, AuditLog, Stock, DailyBar, StockFactor,
-    Prediction, ModelVersion, AnalysisRun,
+    Prediction, ModelVersion, AnalysisRun, SetupRun,
 )
 
 config = context.config

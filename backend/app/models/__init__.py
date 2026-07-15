@@ -12,6 +12,7 @@ from app.models.stock_factor import StockFactor
 from app.models.prediction import Prediction
 from app.models.model_version import ModelVersion
 from app.models.analysis_run import AnalysisRun
+from app.models.setup_run import SetupRun
 
 __all__ = [
     "Base",
@@ -28,4 +29,5 @@ __all__ = [
     "Prediction",
     "ModelVersion",
     "AnalysisRun",
+    "SetupRun",
 ]
