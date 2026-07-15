@@ -2,7 +2,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 SetupReadiness = Literal["uninitialized", "initializing", "failed", "ready"]
 SetupRunStatus = Literal["running", "completed", "failed", "interrupted"]
 
