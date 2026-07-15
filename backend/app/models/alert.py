@@ -1,16 +1,20 @@
 import uuid
 
-from sqlalchemy import String, Text, ForeignKey, Boolean, Uuid as UuidType
+from sqlalchemy import Boolean, ForeignKey, String, Text
+from sqlalchemy import Uuid as UuidType
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class Alert(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "alerts"
 
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UuidType(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+        UuidType(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     strategy_id: Mapped[uuid.UUID | None] = mapped_column(
         UuidType(as_uuid=True), ForeignKey("strategies.id", ondelete="SET NULL"), nullable=True

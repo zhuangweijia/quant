@@ -1,7 +1,6 @@
-import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, Uuid as UuidType
+from sqlalchemy import DateTime, String
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 

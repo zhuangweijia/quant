@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.user import User
 from app.services.auth_service import AuthService
@@ -24,9 +24,7 @@ async def main():
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        result = await session.execute(
-            select(User).where(User.username == admin_username)
-        )
+        result = await session.execute(select(User).where(User.username == admin_username))
         existing = result.scalar_one_or_none()
 
         if existing:

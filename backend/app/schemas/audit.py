@@ -3,8 +3,6 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from app.schemas.common import PageResponse
-
 
 class AuditLogResponse(BaseModel):
     id: UUID

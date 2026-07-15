@@ -10,7 +10,7 @@ Pipeline:
 
 import asyncio
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 import numpy as np
@@ -30,29 +30,77 @@ logger = structlog.get_logger()
 # ── SHAP explanation templates ───────────────────────────────────
 
 FACTOR_TEMPLATES = {
-    "return_5d": lambda v: ("近5日收益 {:>+.1%}".format(v), "近期动量" + ("强劲" if v > 0.05 else "较弱" if v < -0.05 else "平稳")),
-    "return_10d": lambda v: ("近10日收益 {:>+.1%}".format(v), "短期趋势" + ("向上" if v > 0.08 else "向下" if v < -0.08 else "平稳")),
-    "return_20d": lambda v: ("近20日收益 {:>+.1%}".format(v), "中期趋势" + ("向上" if v > 0.08 else "向下" if v < -0.08 else "平稳")),
-    "return_60d": lambda v: ("近60日收益 {:>+.1%}".format(v), "长期趋势" + ("向上" if v > 0.15 else "向下" if v < -0.15 else "平稳")),
-    "excess_return_20d": lambda v: ("近20日超额收益 {:>+.1%}".format(v), "相对大盘" + ("跑赢" if v > 0 else "跑输")),
-    "momentum_12_1": lambda v: ("长期动量 {:>+.1%}".format(v), "长线" + ("强势" if v > 0.15 else "弱势" if v < -0.15 else "中性")),
-    "pe_ttm": lambda v: ("PE TTM {:.1f}".format(v), "估值" + ("偏低" if v < 15 else "偏高" if v > 40 else "适中")),
-    "pe_industry_pct": lambda v: ("行业PE分位 {:.0%}".format(v), "估值低于行业{:.0%}的公司".format(1 - v) if v < 0.3 else "估值高于行业{:.0%}的公司".format(v)),
-    "pb": lambda v: ("PB {:.2f}".format(v), "市净率" + ("低" if v < 1.5 else "高" if v > 5 else "适中")),
-    "dividend_yield": lambda v: ("股息率 {:.1%}".format(v), "分红" + ("丰厚" if v > 0.04 else "一般")),
-    "roe_ttm": lambda v: ("ROE {:.1%}".format(v), "盈利能力" + ("强" if v > 0.15 else "弱" if v < 0.05 else "一般")),
-    "gross_margin": lambda v: ("毛利率 {:.1%}".format(v), "毛利" + ("高" if v > 0.4 else "低")),
-    "debt_ratio": lambda v: ("资产负债率 {:.1%}".format(v), "负债" + ("低" if v < 0.3 else "偏高")),
-    "revenue_yoy": lambda v: ("营收增速 {:>+.1%}".format(v), "成长性" + ("强" if v > 0.2 else "弱" if v < 0 else "平稳")),
-    "profit_yoy": lambda v: ("利润增速 {:>+.1%}".format(v), "利润" + ("高增" if v > 0.3 else "下滑" if v < -0.1 else "稳定")),
-    "turnover_5d_avg": lambda v: ("5日均换手率 {:.1%}".format(v), "交投" + ("活跃" if v > 0.03 else "清淡")),
-    "volatility_20d": lambda v: ("20日波动率 {:.2%}".format(v), "波动" + ("大" if v > 0.025 else "小")),
-    "volume_ratio": lambda v: ("量比 {:.2f}".format(v), "放量" if v > 1.5 else "缩量" if v < 0.5 else "正常"),
-    "rsi_14": lambda v: ("RSI {:.0f}".format(v), "超买" if v > 70 else "超卖" if v < 30 else "中性"),
-    "macd_hist": lambda v: ("MACD柱 {:>+.4f}".format(v), "MACD多头" if v > 0 else "MACD空头"),
-    "boll_position": lambda v: ("布林位置 {:.0%}".format(v), "触上轨" if v > 0.9 else "触下轨" if v < 0.1 else "中轨附近"),
-    "ma_alignment": lambda v: ("均线排列 {:.0f}/4".format(v), "全多头" if v >= 4 else "全空头" if v <= 0 else "混合"),
-    "northbound_holding_change": lambda v: ("北向变动 {:>+.2f}%".format(v * 100), "北向资金流入" if v > 0 else "北向资金流出"),
+    "return_5d": lambda v: (
+        f"近5日收益 {v:>+.1%}",
+        "近期动量" + ("强劲" if v > 0.05 else "较弱" if v < -0.05 else "平稳"),
+    ),
+    "return_10d": lambda v: (
+        f"近10日收益 {v:>+.1%}",
+        "短期趋势" + ("向上" if v > 0.08 else "向下" if v < -0.08 else "平稳"),
+    ),
+    "return_20d": lambda v: (
+        f"近20日收益 {v:>+.1%}",
+        "中期趋势" + ("向上" if v > 0.08 else "向下" if v < -0.08 else "平稳"),
+    ),
+    "return_60d": lambda v: (
+        f"近60日收益 {v:>+.1%}",
+        "长期趋势" + ("向上" if v > 0.15 else "向下" if v < -0.15 else "平稳"),
+    ),
+    "excess_return_20d": lambda v: (
+        f"近20日超额收益 {v:>+.1%}",
+        "相对大盘" + ("跑赢" if v > 0 else "跑输"),
+    ),
+    "momentum_12_1": lambda v: (
+        f"长期动量 {v:>+.1%}",
+        "长线" + ("强势" if v > 0.15 else "弱势" if v < -0.15 else "中性"),
+    ),
+    "pe_ttm": lambda v: (
+        f"PE TTM {v:.1f}",
+        "估值" + ("偏低" if v < 15 else "偏高" if v > 40 else "适中"),
+    ),
+    "pe_industry_pct": lambda v: (
+        f"行业PE分位 {v:.0%}",
+        f"估值低于行业{1 - v:.0%}的公司" if v < 0.3 else f"估值高于行业{v:.0%}的公司",
+    ),
+    "pb": lambda v: (f"PB {v:.2f}", "市净率" + ("低" if v < 1.5 else "高" if v > 5 else "适中")),
+    "dividend_yield": lambda v: (f"股息率 {v:.1%}", "分红" + ("丰厚" if v > 0.04 else "一般")),
+    "roe_ttm": lambda v: (
+        f"ROE {v:.1%}",
+        "盈利能力" + ("强" if v > 0.15 else "弱" if v < 0.05 else "一般"),
+    ),
+    "gross_margin": lambda v: (f"毛利率 {v:.1%}", "毛利" + ("高" if v > 0.4 else "低")),
+    "debt_ratio": lambda v: (f"资产负债率 {v:.1%}", "负债" + ("低" if v < 0.3 else "偏高")),
+    "revenue_yoy": lambda v: (
+        f"营收增速 {v:>+.1%}",
+        "成长性" + ("强" if v > 0.2 else "弱" if v < 0 else "平稳"),
+    ),
+    "profit_yoy": lambda v: (
+        f"利润增速 {v:>+.1%}",
+        "利润" + ("高增" if v > 0.3 else "下滑" if v < -0.1 else "稳定"),
+    ),
+    "turnover_5d_avg": lambda v: (
+        f"5日均换手率 {v:.1%}",
+        "交投" + ("活跃" if v > 0.03 else "清淡"),
+    ),
+    "volatility_20d": lambda v: (f"20日波动率 {v:.2%}", "波动" + ("大" if v > 0.025 else "小")),
+    "volume_ratio": lambda v: (
+        f"量比 {v:.2f}",
+        "放量" if v > 1.5 else "缩量" if v < 0.5 else "正常",
+    ),
+    "rsi_14": lambda v: (f"RSI {v:.0f}", "超买" if v > 70 else "超卖" if v < 30 else "中性"),
+    "macd_hist": lambda v: (f"MACD柱 {v:>+.4f}", "MACD多头" if v > 0 else "MACD空头"),
+    "boll_position": lambda v: (
+        f"布林位置 {v:.0%}",
+        "触上轨" if v > 0.9 else "触下轨" if v < 0.1 else "中轨附近",
+    ),
+    "ma_alignment": lambda v: (
+        f"均线排列 {v:.0f}/4",
+        "全多头" if v >= 4 else "全空头" if v <= 0 else "混合",
+    ),
+    "northbound_holding_change": lambda v: (
+        f"北向变动 {v * 100:>+.2f}%",
+        "北向资金流入" if v > 0 else "北向资金流出",
+    ),
 }
 
 
@@ -72,8 +120,7 @@ class MLModelService:
             buffer_end = end_date + timedelta(days=fwd_days * 3)
             result = await db.execute(
                 select(DailyBar.symbol, DailyBar.trade_date, DailyBar.close)
-                .where(DailyBar.trade_date >= start_date,
-                       DailyBar.trade_date <= buffer_end)
+                .where(DailyBar.trade_date >= start_date, DailyBar.trade_date <= buffer_end)
                 .order_by(DailyBar.symbol, DailyBar.trade_date)
             )
             rows = result.all()
@@ -102,9 +149,11 @@ class MLModelService:
         async with AsyncSessionLocal() as db:
             idx_result = await db.execute(
                 select(DailyBar.trade_date, DailyBar.close)
-                .where(DailyBar.symbol == "000300",
-                       DailyBar.trade_date >= start_date,
-                       DailyBar.trade_date <= buffer_end)
+                .where(
+                    DailyBar.symbol == "000300",
+                    DailyBar.trade_date >= start_date,
+                    DailyBar.trade_date <= buffer_end,
+                )
                 .order_by(DailyBar.trade_date)
             )
             idx_rows = idx_result.all()
@@ -156,6 +205,7 @@ class MLModelService:
         settings = get_settings()
 
         from app.services.feature_engine import FeatureEngine
+
         fe = FeatureEngine()
 
         end_date = date.today()
@@ -184,7 +234,11 @@ class MLModelService:
 
         # Walk-forward split
         dates = sorted(set(X.index.get_level_values("trade_date")))
-        val_cutoff = dates[-settings.MODEL_VAL_WINDOW_DAYS] if len(dates) > settings.MODEL_VAL_WINDOW_DAYS else dates[len(dates) // 2]
+        val_cutoff = (
+            dates[-settings.MODEL_VAL_WINDOW_DAYS]
+            if len(dates) > settings.MODEL_VAL_WINDOW_DAYS
+            else dates[len(dates) // 2]
+        )
 
         train_mask = X.index.get_level_values("trade_date") < val_cutoff
         val_mask = ~train_mask
@@ -198,10 +252,15 @@ class MLModelService:
         feature_names = fe.get_factor_names()
 
         def _do_train():
-            train_data = lgb.Dataset(X_train[feature_names].values, label=y_train.values,
-                                      feature_name=feature_names)
-            val_data = lgb.Dataset(X_val[feature_names].values, label=y_val.values,
-                                    feature_name=feature_names, reference=train_data)
+            train_data = lgb.Dataset(
+                X_train[feature_names].values, label=y_train.values, feature_name=feature_names
+            )
+            val_data = lgb.Dataset(
+                X_val[feature_names].values,
+                label=y_val.values,
+                feature_name=feature_names,
+                reference=train_data,
+            )
 
             params = {
                 "objective": "multiclass",
@@ -215,7 +274,8 @@ class MLModelService:
             }
 
             booster = lgb.train(
-                params, train_data,
+                params,
+                train_data,
                 valid_sets=[val_data],
                 callbacks=[lgb.log_evaluation(0)],
             )
@@ -231,7 +291,7 @@ class MLModelService:
         val_metrics = await self._evaluate_validation(booster, X_val, y_val, feature_names, val_p2)
 
         # Save model
-        version = f"v{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+        version = f"v{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
         model_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), settings.MODEL_DIR)
         os.makedirs(model_dir, exist_ok=True)
         file_path = os.path.join(model_dir, f"model_{version}.txt")
@@ -246,7 +306,7 @@ class MLModelService:
         async with AsyncSessionLocal() as db:
             mv = ModelVersion(
                 version=version,
-                trained_at=datetime.now(timezone.utc),
+                trained_at=datetime.now(UTC),
                 data_start=start_date,
                 data_end=end_date,
                 ic=Decimal(str(round(val_metrics["ic"], 6))),
@@ -302,6 +362,7 @@ class MLModelService:
             return None
 
         from app.services.feature_engine import FeatureEngine
+
         fe = FeatureEngine()
 
         # Get factors for trade_date
@@ -325,6 +386,7 @@ class MLModelService:
         # Save predictions
         async with AsyncSessionLocal() as db:
             from app.models.stock import Stock
+
             stock_result = await db.execute(select(Stock))
             stock_names = {s.symbol: s.name for s in stock_result.scalars().all()}
 
@@ -371,6 +433,7 @@ class MLModelService:
                 return None
 
         from app.services.feature_engine import FeatureEngine
+
         fe = FeatureEngine()
         X = await fe.build_factor_matrix(trade_date, trade_date)
         if X.empty:
@@ -424,13 +487,15 @@ class MLModelService:
                     template = FACTOR_TEMPLATES.get(fname)
                     if template:
                         val_desc, qual_desc = _safe_template(template, fval)
-                        explanation["positive"].append({
-                            "factor": fname,
-                            "value": fval,
-                            "shap": float(shap_row[idx]),
-                            "description": val_desc,
-                            "assessment": qual_desc,
-                        })
+                        explanation["positive"].append(
+                            {
+                                "factor": fname,
+                                "value": fval,
+                                "shap": float(shap_row[idx]),
+                                "description": val_desc,
+                                "assessment": qual_desc,
+                            }
+                        )
 
                 for idx in negative_idx:
                     if shap_row[idx] >= 0:
@@ -440,13 +505,15 @@ class MLModelService:
                     template = FACTOR_TEMPLATES.get(fname)
                     if template:
                         val_desc, qual_desc = _safe_template(template, fval)
-                        explanation["negative"].append({
-                            "factor": fname,
-                            "value": fval,
-                            "shap": float(shap_row[idx]),
-                            "description": val_desc,
-                            "assessment": qual_desc,
-                        })
+                        explanation["negative"].append(
+                            {
+                                "factor": fname,
+                                "value": fval,
+                                "shap": float(shap_row[idx]),
+                                "description": val_desc,
+                                "assessment": qual_desc,
+                            }
+                        )
 
                 pred.explanation = explanation
                 await db.commit()
@@ -460,9 +527,7 @@ class MLModelService:
         """Activate a model version with validation gate."""
         settings = get_settings()
 
-        result = await db.execute(
-            select(ModelVersion).where(ModelVersion.version == version)
-        )
+        result = await db.execute(select(ModelVersion).where(ModelVersion.version == version))
         mv = result.scalar_one_or_none()
         if not mv:
             raise ValueError(f"模型版本 {version} 不存在")
@@ -491,7 +556,8 @@ class MLModelService:
         async with AsyncSessionLocal() as db:
             cutoff = date.today() - timedelta(days=30)
             result = await db.execute(
-                select(Prediction).where(Prediction.trade_date >= cutoff)
+                select(Prediction)
+                .where(Prediction.trade_date >= cutoff)
                 .order_by(Prediction.trade_date.desc())
             )
             recent_preds = result.scalars().all()

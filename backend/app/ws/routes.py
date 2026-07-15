@@ -1,11 +1,11 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import structlog
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-from app.ws.manager import ws_manager
 from app.services.auth_service import AuthService
+from app.ws.manager import ws_manager
 
 logger = structlog.get_logger()
 
@@ -43,20 +43,28 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(None)):
                     channels = msg.get("channels", [])
                     if isinstance(channels, list):
                         await ws_manager.subscribe(websocket, user_id, channels)
-                        await websocket.send_text(json.dumps({
-                            "type": "system",
-                            "data": {"message": "subscribed", "channels": channels},
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }))
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "system",
+                                    "data": {"message": "subscribed", "channels": channels},
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                }
+                            )
+                        )
                 elif action == "unsubscribe":
                     channels = msg.get("channels", [])
                     if isinstance(channels, list):
                         await ws_manager.unsubscribe(websocket, user_id, channels)
-                        await websocket.send_text(json.dumps({
-                            "type": "system",
-                            "data": {"message": "unsubscribed", "channels": channels},
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                        }))
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "system",
+                                    "data": {"message": "unsubscribed", "channels": channels},
+                                    "timestamp": datetime.now(UTC).isoformat(),
+                                }
+                            )
+                        )
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:

@@ -1,7 +1,5 @@
 import asyncio
 import json
-from datetime import datetime, timezone
-from typing import Any
 
 import structlog
 from fastapi import WebSocket

@@ -1,9 +1,8 @@
 import time
-from datetime import datetime, timezone, timedelta
-
-from sqlalchemy import delete, func, select
+from datetime import UTC, datetime, timedelta
 
 import structlog
+from sqlalchemy import delete, func, select
 
 logger = structlog.get_logger()
 
@@ -26,7 +25,12 @@ async def run_cleanup():
 
             tables_config = [
                 ("alerts", "app.models.alert", "Alert", alert_retention),
-                ("notification_logs", "app.models.notification_log", "NotificationLog", log_retention),
+                (
+                    "notification_logs",
+                    "app.models.notification_log",
+                    "NotificationLog",
+                    log_retention,
+                ),
                 ("market_data", "app.models.market_data", "MarketData", data_retention),
                 ("audit_logs", "app.models.audit_log", "AuditLog", log_retention),
             ]
@@ -34,17 +38,19 @@ async def run_cleanup():
             for table_name, module_path, class_name, retention_days in tables_config:
                 try:
                     import importlib
+
                     module = importlib.import_module(module_path)
                     model_class = getattr(module, class_name)
 
-                    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+                    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
                     table_total = 0
 
                     while True:
                         count_result = await db.execute(
-                            select(func.count()).select_from(model_class).where(
-                                model_class.created_at < cutoff
-                            ).limit(1)
+                            select(func.count())
+                            .select_from(model_class)
+                            .where(model_class.created_at < cutoff)
+                            .limit(1)
                         )
                         remaining = count_result.scalar() or 0
                         if remaining == 0:
@@ -53,9 +59,9 @@ async def run_cleanup():
                         result = await db.execute(
                             delete(model_class).where(
                                 model_class.id.in_(
-                                    select(model_class.id).where(
-                                        model_class.created_at < cutoff
-                                    ).limit(_BATCH_SIZE)
+                                    select(model_class.id)
+                                    .where(model_class.created_at < cutoff)
+                                    .limit(_BATCH_SIZE)
                                 )
                             )
                         )

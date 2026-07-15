@@ -5,16 +5,18 @@ Revises: 1718a313bd6e
 Create Date: 2026-07-11 00:00:00.000000
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
+
 revision: str = "7e781c825fac"
-down_revision: Union[str, None] = "733c9ef0c923"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "733c9ef0c923"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -43,8 +45,12 @@ def upgrade() -> None:
         sa.Column("is_st", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("data_quality", sa.String(16), server_default="ok", nullable=False),
         sa.Column("last_synced_date", sa.Date(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("symbol", name="uq_stocks_symbol"),
     )
@@ -61,8 +67,12 @@ def upgrade() -> None:
         sa.Column("volume", sa.Numeric(20, 4), nullable=False),
         sa.Column("amount", sa.Numeric(20, 4), nullable=True),
         sa.Column("turnover_rate", sa.Numeric(10, 4), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("symbol", "trade_date", name="uq_daily_bars_symbol_date"),
     )
@@ -103,8 +113,12 @@ def upgrade() -> None:
         sa.Column("ma_alignment", sa.Numeric(2, 0), nullable=True),
         sa.Column("northbound_holding_pct", sa.Numeric(12, 6), nullable=True),
         sa.Column("northbound_holding_change", sa.Numeric(12, 6), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("symbol", "trade_date", name="uq_stock_factors_symbol_date"),
     )
@@ -122,10 +136,16 @@ def upgrade() -> None:
         sa.Column("confidence", sa.String(16), server_default="normal", nullable=False),
         sa.Column("explanation", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("rank_change", sa.Integer(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("symbol", "trade_date", "model_version", name="uq_predictions_sym_date_ver"),
+        sa.UniqueConstraint(
+            "symbol", "trade_date", "model_version", name="uq_predictions_sym_date_ver"
+        ),
     )
     op.create_index("ix_predictions_date", "predictions", ["trade_date"])
     op.create_index("ix_predictions_date_rank", "predictions", ["trade_date", "rank"])
@@ -143,8 +163,12 @@ def upgrade() -> None:
         sa.Column("is_active", sa.Boolean(), server_default="false", nullable=False),
         sa.Column("file_path", sa.String(256), nullable=False),
         sa.Column("n_estimators", sa.Integer(), server_default="200", nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("version"),
     )
@@ -158,8 +182,12 @@ def upgrade() -> None:
         sa.Column("stages", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("status", sa.String(16), server_default="running", nullable=False),
         sa.Column("error", sa.String(1024), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("run_id"),
     )
 
@@ -172,8 +200,12 @@ def upgrade() -> None:
         sa.Column("rule_name", sa.String(128), nullable=True),
         sa.Column("message", sa.Text(), nullable=False),
         sa.Column("is_read", sa.Boolean(), server_default="false", nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
 

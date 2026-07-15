@@ -1,9 +1,9 @@
 import asyncio
 import random
 from abc import ABC, abstractmethod
-from datetime import datetime, timedelta, timezone
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import AsyncIterator
 
 import structlog
 
@@ -19,24 +19,19 @@ class MarketDataProvider(ABC):
         start: str | None = None,
         end: str | None = None,
         limit: int = 500,
-    ) -> list[dict]:
-        ...
+    ) -> list[dict]: ...
 
     @abstractmethod
-    async def subscribe_ticks(self, symbols: list[str]) -> AsyncIterator[dict]:
-        ...
+    async def subscribe_ticks(self, symbols: list[str]) -> AsyncIterator[dict]: ...
 
     @abstractmethod
-    async def search_symbols(self, keyword: str) -> list[dict]:
-        ...
+    async def search_symbols(self, keyword: str) -> list[dict]: ...
 
     @abstractmethod
-    async def get_latest_price(self, symbol: str) -> dict:
-        ...
+    async def get_latest_price(self, symbol: str) -> dict: ...
 
     @abstractmethod
-    async def health_check(self) -> bool:
-        ...
+    async def health_check(self) -> bool: ...
 
 
 class MockDataProvider(MarketDataProvider):
@@ -65,8 +60,14 @@ class MockDataProvider(MarketDataProvider):
 
     def _tf_to_minutes(self, timeframe: str) -> int:
         mapping = {
-            "1m": 1, "5m": 5, "15m": 15, "30m": 30,
-            "1h": 60, "4h": 240, "1d": 1440, "1w": 10080,
+            "1m": 1,
+            "5m": 5,
+            "15m": 15,
+            "30m": 30,
+            "1h": 60,
+            "4h": 240,
+            "1d": 1440,
+            "1w": 10080,
         }
         return mapping.get(timeframe, 1440)
 
@@ -88,30 +89,37 @@ class MockDataProvider(MarketDataProvider):
             high_p = max(open_p, close_p) * (1 + random.uniform(0, 0.01))
             low_p = min(open_p, close_p) * (1 - random.uniform(0, 0.01))
             volume = random.uniform(100, 10000)
-            klines.append({
-                "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
-                "open": f"{open_p:.8f}",
-                "high": f"{high_p:.8f}",
-                "low": f"{low_p:.8f}",
-                "close": f"{close_p:.8f}",
-                "volume": f"{volume:.8f}",
-            })
+            klines.append(
+                {
+                    "timestamp": ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    "open": f"{open_p:.8f}",
+                    "high": f"{high_p:.8f}",
+                    "low": f"{low_p:.8f}",
+                    "close": f"{close_p:.8f}",
+                    "volume": f"{volume:.8f}",
+                }
+            )
             price = close_p
         return klines
 
     async def get_klines(
-        self, symbol: str, timeframe: str,
-        start: str | None = None, end: str | None = None, limit: int = 500,
+        self,
+        symbol: str,
+        timeframe: str,
+        start: str | None = None,
+        end: str | None = None,
+        limit: int = 500,
     ) -> list[dict]:
         if start:
             st = datetime.strptime(start, "%Y-%m-%d")
         else:
-            st = datetime.now(timezone.utc) - timedelta(days=limit)
+            st = datetime.now(UTC) - timedelta(days=limit)
         return self._generate_klines(symbol, timeframe, st, min(limit, 500))
 
     async def subscribe_ticks(self, symbols: list[str]) -> AsyncIterator[dict]:
         while True:
             import asyncio
+
             await asyncio.sleep(1)
             for symbol in symbols:
                 info = self._SYMBOLS.get(symbol)
@@ -122,7 +130,7 @@ class MockDataProvider(MarketDataProvider):
                         "symbol": symbol,
                         "price": f"{price:.8f}",
                         "volume": f"{random.uniform(1, 100):.8f}",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "timestamp": datetime.now(UTC).isoformat(),
                     }
 
     async def search_symbols(self, keyword: str) -> list[dict]:
@@ -130,23 +138,25 @@ class MockDataProvider(MarketDataProvider):
         results = []
         for sym, info in self._SYMBOLS.items():
             if kw in sym.upper() or kw in info["name"].upper():
-                results.append({
-                    "symbol": sym,
-                    "name": info["name"],
-                    "market": info["market"],
-                })
+                results.append(
+                    {
+                        "symbol": sym,
+                        "name": info["name"],
+                        "market": info["market"],
+                    }
+                )
         return results[:20]
 
     async def get_latest_price(self, symbol: str) -> dict:
         info = self._SYMBOLS.get(symbol)
         if not info:
-            return {"symbol": symbol, "price": "0", "timestamp": datetime.now(timezone.utc).isoformat()}
+            return {"symbol": symbol, "price": "0", "timestamp": datetime.now(UTC).isoformat()}
         base = info["base_price"]
         price = base * (1 + random.uniform(-0.005, 0.005))
         return {
             "symbol": symbol,
             "price": f"{price:.8f}",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
     async def health_check(self) -> bool:
@@ -157,6 +167,7 @@ class AKShareProvider(MarketDataProvider):
     def __init__(self):
         try:
             import akshare as ak
+
             self._ak = ak
         except ImportError:
             self._ak = None
@@ -166,32 +177,38 @@ class AKShareProvider(MarketDataProvider):
             return []
         try:
             import asyncio
-            return await asyncio.to_thread(self._get_klines_sync, symbol, timeframe, start, end, limit)
+
+            return await asyncio.to_thread(
+                self._get_klines_sync, symbol, timeframe, start, end, limit
+            )
         except Exception as e:
             logger.error("akshare.get_klines_failed", error=str(e))
             return []
 
     def _get_klines_sync(self, symbol, timeframe, start, end, limit):
-        import pandas as pd
         ak = self._ak
         end_date = end or datetime.now().strftime("%Y%m%d")
         start_date = start or (datetime.now() - timedelta(days=365)).strftime("%Y%m%d")
         period = "daily" if timeframe in ("1d", "1w") else timeframe
         try:
-            df = ak.stock_zh_a_hist(symbol=symbol, period=period, start_date=start_date, end_date=end_date, adjust="qfq")
+            df = ak.stock_zh_a_hist(
+                symbol=symbol, period=period, start_date=start_date, end_date=end_date, adjust="qfq"
+            )
         except Exception:
             return []
         df = df.tail(limit)
         results = []
         for _, row in df.iterrows():
-            results.append({
-                "timestamp": str(row.get("日期", row.iloc[0])),
-                "open": f"{row.get('开盘', row.iloc[1]):.8f}",
-                "high": f"{row.get('最高', row.iloc[2]):.8f}",
-                "low": f"{row.get('最低', row.iloc[3]):.8f}",
-                "close": f"{row.get('收盘', row.iloc[4]):.8f}",
-                "volume": f"{row.get('成交量', row.iloc[5]):.8f}",
-            })
+            results.append(
+                {
+                    "timestamp": str(row.get("日期", row.iloc[0])),
+                    "open": f"{row.get('开盘', row.iloc[1]):.8f}",
+                    "high": f"{row.get('最高', row.iloc[2]):.8f}",
+                    "low": f"{row.get('最低', row.iloc[3]):.8f}",
+                    "close": f"{row.get('收盘', row.iloc[4]):.8f}",
+                    "volume": f"{row.get('成交量', row.iloc[5]):.8f}",
+                }
+            )
         return results
 
     async def subscribe_ticks(self, symbols):
@@ -203,6 +220,7 @@ class AKShareProvider(MarketDataProvider):
             return []
         try:
             import asyncio
+
             return await asyncio.to_thread(self._search_sync, keyword)
         except Exception as e:
             logger.error("akshare.search_failed", error=str(e))
@@ -212,9 +230,14 @@ class AKShareProvider(MarketDataProvider):
         ak = self._ak
         try:
             df = ak.stock_zh_a_spot_em()
-            mask = df["名称"].str.contains(keyword, case=False, na=False) | df["代码"].str.contains(keyword, case=False, na=False)
+            mask = df["名称"].str.contains(keyword, case=False, na=False) | df["代码"].str.contains(
+                keyword, case=False, na=False
+            )
             df = df[mask].head(20)
-            return [{"symbol": str(r["代码"]), "name": str(r["名称"]), "market": "a_stock"} for _, r in df.iterrows()]
+            return [
+                {"symbol": str(r["代码"]), "name": str(r["名称"]), "market": "a_stock"}
+                for _, r in df.iterrows()
+            ]
         except Exception:
             return []
 
@@ -223,6 +246,7 @@ class AKShareProvider(MarketDataProvider):
             return {"symbol": symbol, "price": "0"}
         try:
             import asyncio
+
             return await asyncio.to_thread(self._get_price_sync, symbol)
         except Exception:
             return {"symbol": symbol, "price": "0"}
@@ -232,7 +256,11 @@ class AKShareProvider(MarketDataProvider):
         try:
             df = ak.stock_zh_a_spot_em()
             row = df[df["代码"] == symbol].iloc[0]
-            return {"symbol": symbol, "price": f"{row['最新价']:.8f}", "timestamp": datetime.now(timezone.utc).isoformat()}
+            return {
+                "symbol": symbol,
+                "price": f"{row['最新价']:.8f}",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }
         except Exception:
             return {"symbol": symbol, "price": "0"}
 
@@ -249,6 +277,7 @@ def get_provider(market: str) -> MarketDataProvider:
     if market == "a_stock":
         try:
             import akshare
+
             provider = AKShareProvider()
             _providers[market] = provider
             return provider
@@ -263,6 +292,7 @@ async def get_cached_prices(
     symbols: list[tuple[str, str]],
 ) -> dict[str, Decimal]:
     import redis.asyncio as aioredis
+
     from app.config import get_settings
 
     if not symbols:
@@ -330,7 +360,6 @@ async def _batch_akshare_prices(symbols: list[str]) -> dict[str, Decimal]:
         return {}
     try:
         import akshare as ak
-        import pandas as pd
 
         def _fetch() -> dict[str, str]:
             df = ak.stock_zh_a_spot_em()

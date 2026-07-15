@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query
 
-from app.api.deps import CurrentUser, DBSession
+from app.api.deps import CurrentUser
 from app.schemas.common import ResponseBase
 from app.schemas.market import KlineData, SymbolInfo
 from app.services.market_service import get_provider
@@ -35,14 +35,16 @@ async def get_klines(
     raw = await provider.get_klines(symbol, timeframe, start, end, limit)
     data = []
     for r in raw:
-        data.append(KlineData(
-            timestamp=r["timestamp"],
-            open=r["open"],
-            high=r["high"],
-            low=r["low"],
-            close=r["close"],
-            volume=r["volume"],
-        ))
+        data.append(
+            KlineData(
+                timestamp=r["timestamp"],
+                open=r["open"],
+                high=r["high"],
+                low=r["low"],
+                close=r["close"],
+                volume=r["volume"],
+            )
+        )
     return ResponseBase(data=data)
 
 

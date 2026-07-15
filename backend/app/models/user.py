@@ -1,17 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import String, Boolean, Integer, DateTime
+from sqlalchemy import Boolean, DateTime, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, UUIDMixin, TimestampMixin
+from app.models.base import Base, TimestampMixin, UUIDMixin
 
 
 class User(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "users"
 
-    username: Mapped[str] = mapped_column(
-        String(64), unique=True, index=True, nullable=False
-    )
+    username: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(256), nullable=False)
     role: Mapped[str] = mapped_column(String(16), default="admin", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

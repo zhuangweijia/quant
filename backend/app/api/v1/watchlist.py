@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.watchlist import UserWatchlist
 from app.schemas.common import ResponseBase
-from pydantic import BaseModel
 
 router = APIRouter()
 

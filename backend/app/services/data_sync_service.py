@@ -9,17 +9,16 @@ Supports:
 """
 
 import asyncio
-import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import AsyncSessionLocal
-from app.models.stock import Stock
 from app.models.daily_bar import DailyBar
+from app.models.stock import Stock
 
 logger = structlog.get_logger()
 
@@ -71,15 +70,16 @@ class DataSyncService:
                     new_symbols.add(symbol)
 
             # Mark stocks no longer in CSI 300
-            constituent_symbols = {str(r.get("成分券代码", r.iloc[0])).strip() for _, r in df.iterrows()}
+            constituent_symbols = {
+                str(r.get("成分券代码", r.iloc[0])).strip() for _, r in df.iterrows()
+            }
             for sym, stock in existing_map.items():
                 if sym not in constituent_symbols:
                     stock.in_csi300 = False
 
             await db.commit()
 
-            logger.info("data_sync.constituents_synced",
-                        total=df.shape[0], new=len(new_symbols))
+            logger.info("data_sync.constituents_synced", total=df.shape[0], new=len(new_symbols))
             return {"success": True, "total": df.shape[0], "new": len(new_symbols)}
 
     # ── Daily K-line Sync ─────────────────────────────────────────
@@ -98,9 +98,7 @@ class DataSyncService:
     async def sync_daily_bars_incremental(self) -> dict:
         """Incremental sync for all CSI 300 stocks."""
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Stock).where(Stock.in_csi300.is_(True))
-            )
+            result = await db.execute(select(Stock).where(Stock.in_csi300.is_(True)))
             stocks = result.scalars().all()
 
         total = len(stocks)
@@ -109,7 +107,11 @@ class DataSyncService:
 
         for i, stock in enumerate(stocks):
             last = stock.last_synced_date
-            start = last + timedelta(days=1) if last else date.today() - timedelta(days=_DEFAULT_HISTORY_YEARS * 365)
+            start = (
+                last + timedelta(days=1)
+                if last
+                else date.today() - timedelta(days=_DEFAULT_HISTORY_YEARS * 365)
+            )
 
             if start >= date.today():
                 success += 1
@@ -128,12 +130,15 @@ class DataSyncService:
                 failed_list.append(stock.symbol)
 
             if (i + 1) % 50 == 0:
-                logger.info("data_sync.incremental_progress",
-                            done=i + 1, total=total, success=success)
+                logger.info(
+                    "data_sync.incremental_progress", done=i + 1, total=total, success=success
+                )
 
         summary = {
-            "total": total, "success": success,
-            "failed": len(failed_list), "failed_symbols": failed_list,
+            "total": total,
+            "success": success,
+            "failed": len(failed_list),
+            "failed_symbols": failed_list,
         }
         logger.info("data_sync.incremental_complete", **summary)
 
@@ -170,17 +175,21 @@ class DataSyncService:
             elif isinstance(trade_date_val, datetime):
                 trade_date_val = trade_date_val.date()
 
-            rows.append({
-                "symbol": db_symbol,
-                "trade_date": trade_date_val,
-                "open": Decimal(str(row.get("开盘", row.iloc[1]))),
-                "high": Decimal(str(row.get("最高", row.iloc[2]))),
-                "low": Decimal(str(row.get("最低", row.iloc[3]))),
-                "close": Decimal(str(row.get("收盘", row.iloc[4]))),
-                "volume": Decimal(str(row.get("成交量", row.iloc[5]))),
-                "amount": Decimal(str(row.get("成交额", 0))) if "成交额" in row else None,
-                "turnover_rate": Decimal(str(row.get("换手率", 0))) if "换手率" in row else None,
-            })
+            rows.append(
+                {
+                    "symbol": db_symbol,
+                    "trade_date": trade_date_val,
+                    "open": Decimal(str(row.get("开盘", row.iloc[1]))),
+                    "high": Decimal(str(row.get("最高", row.iloc[2]))),
+                    "low": Decimal(str(row.get("最低", row.iloc[3]))),
+                    "close": Decimal(str(row.get("收盘", row.iloc[4]))),
+                    "volume": Decimal(str(row.get("成交量", row.iloc[5]))),
+                    "amount": Decimal(str(row.get("成交额", 0))) if "成交额" in row else None,
+                    "turnover_rate": Decimal(str(row.get("换手率", 0)))
+                    if "换手率" in row
+                    else None,
+                }
+            )
 
         async with AsyncSessionLocal() as db:
             stmt = pg_insert(DailyBar).values(rows)
@@ -211,17 +220,19 @@ class DataSyncService:
             if len(raw) < 6:
                 continue
             td = datetime.strptime(raw[0], "%Y-%m-%d").date()
-            rows.append({
-                "symbol": symbol,
-                "trade_date": td,
-                "open": Decimal(raw[1]),
-                "high": Decimal(raw[3]),
-                "low": Decimal(raw[4]),
-                "close": Decimal(raw[2]),
-                "volume": Decimal(raw[5]),
-                "amount": None,
-                "turnover_rate": None,
-            })
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "trade_date": td,
+                    "open": Decimal(raw[1]),
+                    "high": Decimal(raw[3]),
+                    "low": Decimal(raw[4]),
+                    "close": Decimal(raw[2]),
+                    "volume": Decimal(raw[5]),
+                    "amount": None,
+                    "turnover_rate": None,
+                }
+            )
 
         if not rows:
             return {"success": False, "symbol": symbol, "error": "no valid rows"}
@@ -248,6 +259,7 @@ class DataSyncService:
     async def sync_fundamentals(self) -> dict:
         """Weekly fundamentals sync. Caches to Redis."""
         import redis.asyncio as aioredis
+
         from app.config import get_settings
 
         settings = get_settings()
@@ -255,9 +267,7 @@ class DataSyncService:
 
         try:
             async with AsyncSessionLocal() as db:
-                result = await db.execute(
-                    select(Stock).where(Stock.in_csi300.is_(True))
-                )
+                result = await db.execute(select(Stock).where(Stock.in_csi300.is_(True)))
                 stocks = result.scalars().all()
 
             success = 0
@@ -273,11 +283,11 @@ class DataSyncService:
                         success += 1
                     await asyncio.sleep(_AKSHARE_DELAY)
                 except Exception as e:
-                    logger.warning("data_sync.fundamental_failed",
-                                   symbol=stock.symbol, error=str(e))
+                    logger.warning(
+                        "data_sync.fundamental_failed", symbol=stock.symbol, error=str(e)
+                    )
 
-            logger.info("data_sync.fundamentals_synced",
-                        total=len(stocks), success=success)
+            logger.info("data_sync.fundamentals_synced", total=len(stocks), success=success)
             return {"success": True, "total": len(stocks), "cached": success}
         finally:
             await r.aclose()
@@ -293,10 +303,16 @@ class DataSyncService:
                     df = ak.stock_a_indicator_lg(symbol=symbol)
                     if df is not None and not df.empty:
                         last = df.iloc[-1]
-                        result["pe_ttm"] = float(last.get("pe_ttm", 0)) if last.get("pe_ttm") else None
+                        result["pe_ttm"] = (
+                            float(last.get("pe_ttm", 0)) if last.get("pe_ttm") else None
+                        )
                         result["pb"] = float(last.get("pb", 0)) if last.get("pb") else None
-                        result["dividend_yield"] = float(last.get("dv_ratio", 0)) if last.get("dv_ratio") else None
-                        result["ps_ttm"] = float(last.get("ps_ttm", 0)) if last.get("ps_ttm") else None
+                        result["dividend_yield"] = (
+                            float(last.get("dv_ratio", 0)) if last.get("dv_ratio") else None
+                        )
+                        result["ps_ttm"] = (
+                            float(last.get("ps_ttm", 0)) if last.get("ps_ttm") else None
+                        )
                 except Exception:
                     pass
 
@@ -324,6 +340,7 @@ class DataSyncService:
     async def sync_northbound_flow(self) -> dict:
         """Daily northbound capital flow sync."""
         import redis.asyncio as aioredis
+
         from app.config import get_settings
 
         settings = get_settings()
@@ -369,9 +386,7 @@ class DataSyncService:
     async def validate_data_integrity(self) -> dict:
         """Check for consecutive missing trading days per stock."""
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Stock).where(Stock.in_csi300.is_(True))
-            )
+            result = await db.execute(select(Stock).where(Stock.in_csi300.is_(True)))
             stocks = result.scalars().all()
 
             warnings = 0
@@ -404,8 +419,7 @@ class DataSyncService:
 
             await db.commit()
 
-        logger.info("data_sync.integrity_checked",
-                    total=len(stocks), warnings=warnings)
+        logger.info("data_sync.integrity_checked", total=len(stocks), warnings=warnings)
         return {"total": len(stocks), "warnings": warnings}
 
     # ── Alert ─────────────────────────────────────────────────────
@@ -413,12 +427,16 @@ class DataSyncService:
     async def _publish_sync_alert(self, failed: int, total: int):
         try:
             from app.core.events import event_bus
-            await event_bus.publish(event_bus.TOPIC_DATA_SYNC_ALERT, {
-                "failed": failed,
-                "total": total,
-                "rate": failed / total if total > 0 else 0,
-                "message": f"数据同步失败率过高: {failed}/{total}",
-            })
+
+            await event_bus.publish(
+                event_bus.TOPIC_DATA_SYNC_ALERT,
+                {
+                    "failed": failed,
+                    "total": total,
+                    "rate": failed / total if total > 0 else 0,
+                    "message": f"数据同步失败率过高: {failed}/{total}",
+                },
+            )
         except Exception:
             pass
 
@@ -470,7 +488,8 @@ def _fetch_tencent_klines(symbol: str, start_date: str, end_date: str) -> list[l
 
     Returns list of [date, open, close, high, low, volume] strings.
     """
-    import subprocess, json
+    import json
+    import subprocess
 
     prefix = "sh" if symbol.startswith("6") else "sz"
     ticker = f"{prefix}{symbol}"
@@ -480,7 +499,9 @@ def _fetch_tencent_klines(symbol: str, start_date: str, end_date: str) -> list[l
     try:
         result = subprocess.run(
             ["curl", "-s", "--connect-timeout", "10", "--max-time", "20", url],
-            capture_output=True, text=True, timeout=25,
+            capture_output=True,
+            text=True,
+            timeout=25,
         )
         if result.returncode != 0 or not result.stdout:
             return []
@@ -500,7 +521,7 @@ def _fetch_tencent_klines(symbol: str, start_date: str, end_date: str) -> list[l
 def _safe_float_legacy(row, key, default=None):
     """Extract a float from a pandas row, handling None/NaN."""
     try:
-        val = row.get(key) if hasattr(row, 'get') else None
+        val = row.get(key) if hasattr(row, "get") else None
         if val is None or val == "" or (isinstance(val, float) and val != val):
             return default
         return float(val)

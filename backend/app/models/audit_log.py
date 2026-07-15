@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, DateTime, Index, ForeignKey, func, Uuid as UuidType
+from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import Uuid as UuidType
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -15,7 +16,9 @@ class AuditLog(Base):
         Index("ix_audit_logs_action_created", "action", "created_at"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(UuidType(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        UuidType(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         UuidType(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

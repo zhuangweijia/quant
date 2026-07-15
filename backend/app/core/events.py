@@ -1,6 +1,7 @@
 import asyncio
 import json
-from typing import Callable, Any
+from collections.abc import Callable
+from typing import Any
 
 import redis.asyncio as aioredis
 import structlog
@@ -59,9 +60,7 @@ class EventBus:
 
     async def unsubscribe(self, topic: str, handler: Callable | None = None):
         if handler and topic in self._handlers:
-            self._handlers[topic] = [
-                h for h in self._handlers[topic] if h != handler
-            ]
+            self._handlers[topic] = [h for h in self._handlers[topic] if h != handler]
         else:
             self._handlers.pop(topic, None)
             if self._pubsub:

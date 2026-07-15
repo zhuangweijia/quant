@@ -1,9 +1,9 @@
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.setting import Setting
 from app.core.security import Encryption
-import structlog
+from app.models.setting import Setting
 
 logger = structlog.get_logger()
 
@@ -39,8 +39,12 @@ async def get_setting(db: AsyncSession, user_id: str | None, category: str, key:
 
 
 async def set_setting(
-    db: AsyncSession, user_id: str | None, category: str, key: str,
-    value: str, encrypted: bool = False,
+    db: AsyncSession,
+    user_id: str | None,
+    category: str,
+    key: str,
+    value: str,
+    encrypted: bool = False,
 ) -> Setting:
     result = await db.execute(
         select(Setting).where(

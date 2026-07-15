@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import String, Numeric, BigInteger, Index, UniqueConstraint, DateTime
+from sqlalchemy import BigInteger, DateTime, Index, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -26,9 +26,7 @@ class MarketData(TimestampMixin, Base):
         ),
     )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(32), nullable=False)
     market: Mapped[str] = mapped_column(String(16), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(8), nullable=False)

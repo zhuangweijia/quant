@@ -1,5 +1,6 @@
-import structlog
 import logging
+
+import structlog
 
 from app.config import get_settings
 

@@ -1,16 +1,21 @@
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Query, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
+from sqlalchemy import func, select
 
 from app.api.deps import AdminUser, DBSession
-from app.models.user import User
 from app.models.audit_log import AuditLog
+from app.models.user import User
+from app.schemas.admin import (
+    AdminUserListResponse,
+    AdminUserResponse,
+    ChangeRoleRequest,
+    ResetPasswordRequest,
+)
+from app.schemas.audit import AuditLogListResponse, AuditLogResponse
 from app.schemas.common import ResponseBase
-from app.schemas.admin import AdminUserResponse, AdminUserListResponse, ResetPasswordRequest, ChangeRoleRequest
-from app.schemas.audit import AuditLogResponse, AuditLogListResponse
-from app.services.audit_service import log_action, extract_request_info
-from sqlalchemy import select, func
+from app.services.audit_service import extract_request_info, log_action
 
 router = APIRouter()
 
@@ -45,13 +50,15 @@ async def list_users(
     users = result.scalars().all()
 
     total_pages = (total + page_size - 1) // page_size if total else 0
-    return ResponseBase(data=AdminUserListResponse(
-        items=[AdminUserResponse.model_validate(u) for u in users],
-        total=total or 0,
-        page=page,
-        page_size=page_size,
-        total_pages=total_pages,
-    ))
+    return ResponseBase(
+        data=AdminUserListResponse(
+            items=[AdminUserResponse.model_validate(u) for u in users],
+            total=total or 0,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
+    )
 
 
 @router.patch("/users/{user_id}/disable", response_model=ResponseBase[AdminUserResponse])
@@ -72,7 +79,16 @@ async def disable_user(
     await db.flush()
 
     ip, ua = extract_request_info(request)
-    await log_action(db, user_id=admin.id, action="admin.user_disable", resource_type="user", resource_id=str(user_id), detail={"username": user.username}, ip_address=ip, user_agent=ua)
+    await log_action(
+        db,
+        user_id=admin.id,
+        action="admin.user_disable",
+        resource_type="user",
+        resource_id=str(user_id),
+        detail={"username": user.username},
+        ip_address=ip,
+        user_agent=ua,
+    )
 
     return ResponseBase(data=AdminUserResponse.model_validate(user))
 
@@ -92,7 +108,16 @@ async def enable_user(
     await db.flush()
 
     ip, ua = extract_request_info(request)
-    await log_action(db, user_id=admin.id, action="admin.user_enable", resource_type="user", resource_id=str(user_id), detail={"username": user.username}, ip_address=ip, user_agent=ua)
+    await log_action(
+        db,
+        user_id=admin.id,
+        action="admin.user_enable",
+        resource_type="user",
+        resource_id=str(user_id),
+        detail={"username": user.username},
+        ip_address=ip,
+        user_agent=ua,
+    )
 
     return ResponseBase(data=AdminUserResponse.model_validate(user))
 
@@ -113,11 +138,21 @@ async def reset_password(
         raise HTTPException(status_code=404, detail="用户不存在")
 
     from app.services.auth_service import AuthService
+
     user.hashed_password = AuthService.hash_password(payload.new_password)
     await db.flush()
 
     ip, ua = extract_request_info(request)
-    await log_action(db, user_id=admin.id, action="admin.user_password_reset", resource_type="user", resource_id=str(user_id), detail={"username": user.username}, ip_address=ip, user_agent=ua)
+    await log_action(
+        db,
+        user_id=admin.id,
+        action="admin.user_password_reset",
+        resource_type="user",
+        resource_id=str(user_id),
+        detail={"username": user.username},
+        ip_address=ip,
+        user_agent=ua,
+    )
 
     return ResponseBase()
 
@@ -142,7 +177,16 @@ async def change_role(
     await db.flush()
 
     ip, ua = extract_request_info(request)
-    await log_action(db, user_id=admin.id, action="admin.user_role_change", resource_type="user", resource_id=str(user_id), detail={"username": user.username, "old_role": old_role, "new_role": payload.role}, ip_address=ip, user_agent=ua)
+    await log_action(
+        db,
+        user_id=admin.id,
+        action="admin.user_role_change",
+        resource_type="user",
+        resource_id=str(user_id),
+        detail={"username": user.username, "old_role": old_role, "new_role": payload.role},
+        ip_address=ip,
+        user_agent=ua,
+    )
 
     return ResponseBase(data=AdminUserResponse.model_validate(user))
 
@@ -181,10 +225,12 @@ async def list_audit_logs(
     logs = result.scalars().all()
 
     total_pages = (total + page_size - 1) // page_size if total else 0
-    return ResponseBase(data=AuditLogListResponse(
-        items=[AuditLogResponse.model_validate(l) for l in logs],
-        total=total or 0,
-        page=page,
-        page_size=page_size,
-        total_pages=total_pages,
-    ))
+    return ResponseBase(
+        data=AuditLogListResponse(
+            items=[AuditLogResponse.model_validate(l) for l in logs],
+            total=total or 0,
+            page=page,
+            page_size=page_size,
+            total_pages=total_pages,
+        )
+    )

@@ -6,21 +6,21 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.model_version import ModelVersion
 from app.schemas.common import ResponseBase
 from app.schemas.model import (
-    ModelVersionItem, ModelVersionListResponse,
-    TrainResponse, BacktestRequest, BacktestResponse,
+    BacktestRequest,
+    ModelVersionItem,
+    ModelVersionListResponse,
+    TrainResponse,
 )
-from app.models.model_version import ModelVersion
 
 router = APIRouter()
 
 
 @router.get("/versions", response_model=ResponseBase[ModelVersionListResponse])
 async def list_versions(db: DBSession):
-    result = await db.execute(
-        select(ModelVersion).order_by(ModelVersion.trained_at.desc())
-    )
+    result = await db.execute(select(ModelVersion).order_by(ModelVersion.trained_at.desc()))
     versions = [
         ModelVersionItem(
             version=v.version,
@@ -47,19 +47,19 @@ async def trigger_training(user: CurrentUser, db: DBSession):
 
     try:
         result = await ml_model_service.train()
-        return ResponseBase(data=TrainResponse(
-            version=result.get("version", ""),
-            ic=result.get("ic"),
-            val_accuracy=result.get("val_accuracy"),
-        ))
+        return ResponseBase(
+            data=TrainResponse(
+                version=result.get("version", ""),
+                ic=result.get("ic"),
+                val_accuracy=result.get("val_accuracy"),
+            )
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"训练失败: {e}")
 
 
 @router.post("/{version}/activate", response_model=ResponseBase[dict])
-async def activate_model(
-    version: str, user: CurrentUser, db: DBSession
-):
+async def activate_model(version: str, user: CurrentUser, db: DBSession):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可激活模型")
 
@@ -73,9 +73,7 @@ async def activate_model(
 
 
 @router.post("/backtest", response_model=ResponseBase[dict])
-async def run_backtest(
-    payload: BacktestRequest, user: CurrentUser, db: DBSession
-):
+async def run_backtest(payload: BacktestRequest, user: CurrentUser, db: DBSession):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可执行回测")
 

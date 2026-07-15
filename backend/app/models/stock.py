@@ -1,6 +1,6 @@
-from datetime import date, datetime
+from datetime import date
 
-from sqlalchemy import String, Date, Boolean, DateTime, Index, UniqueConstraint
+from sqlalchemy import Boolean, Date, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin
@@ -8,9 +8,7 @@ from app.models.base import Base, TimestampMixin
 
 class Stock(TimestampMixin, Base):
     __tablename__ = "stocks"
-    __table_args__ = (
-        UniqueConstraint("symbol", name="uq_stocks_symbol"),
-    )
+    __table_args__ = (UniqueConstraint("symbol", name="uq_stocks_symbol"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(16), nullable=False)

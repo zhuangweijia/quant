@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import UTC
 
 import structlog
 from fastapi import FastAPI, Request
@@ -23,12 +24,16 @@ logger = structlog.get_logger()
 async def _forward_event_to_ws(topic: str, data: dict):
     user_id = data.get("user_id")
     if user_id:
-        from datetime import datetime, timezone
-        await ws_manager.send_to_user(user_id, {
-            "type": topic,
-            "data": data,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
+        from datetime import datetime
+
+        await ws_manager.send_to_user(
+            user_id,
+            {
+                "type": topic,
+                "data": data,
+                "timestamp": datetime.now(UTC).isoformat(),
+            },
+        )
 
 
 @asynccontextmanager
@@ -59,6 +64,7 @@ async def lifespan(app: FastAPI):
             logger.warning("event_bus.subscribe_failed", topic=topic, error=str(e))
 
     from app.services.analysis_pipeline import analysis_pipeline
+
     analysis_pipeline.start()
     yield
     analysis_pipeline.stop()
@@ -131,6 +137,7 @@ async def health():
 
     try:
         import redis.asyncio as aioredis
+
         r = aioredis.from_url(settings.REDIS_URL)
         await r.ping()
         await r.close()

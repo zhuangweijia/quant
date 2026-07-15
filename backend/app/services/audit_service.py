@@ -1,10 +1,9 @@
-from datetime import datetime, timezone
 from uuid import UUID
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.audit_log import AuditLog
-import structlog
 
 logger = structlog.get_logger()
 

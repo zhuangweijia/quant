@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.user import User
 from app.services.auth_service import AuthService
@@ -27,9 +27,7 @@ async def main():
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as session:
-        result = await session.execute(
-            select(User).where(User.username == admin_username)
-        )
+        result = await session.execute(select(User).where(User.username == admin_username))
         user = result.scalar_one_or_none()
 
         if not user:
@@ -40,18 +38,21 @@ async def main():
         if force:
             user.hashed_password = AuthService.hash_password(new_password)
             await session.commit()
-            print(f"Admin password force-reset to env ADMIN_PASSWORD (default: Admin@2024)")
+            print("Admin password force-reset to env ADMIN_PASSWORD (default: Admin@2024)")
         else:
             is_weak = any(
-                AuthService.verify_password(weak, user.hashed_password)
-                for weak in WEAK_PASSWORDS
+                AuthService.verify_password(weak, user.hashed_password) for weak in WEAK_PASSWORDS
             )
             if is_weak:
                 user.hashed_password = AuthService.hash_password(new_password)
                 await session.commit()
-                print(f"Admin password was a known weak default. Reset to env ADMIN_PASSWORD (default: Admin@2024)")
+                print(
+                    "Admin password was a known weak default. Reset to env ADMIN_PASSWORD (default: Admin@2024)"
+                )
             else:
-                print(f"Admin password has been manually changed. Skipping. Use --force to force reset.")
+                print(
+                    "Admin password has been manually changed. Skipping. Use --force to force reset."
+                )
 
     await engine.dispose()
 

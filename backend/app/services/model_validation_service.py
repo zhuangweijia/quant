@@ -1,14 +1,13 @@
 """Model validation service — quintile backtest for ranking-based selection."""
 
 from datetime import date, timedelta
-from decimal import Decimal
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.prediction import Prediction
 from app.models.daily_bar import DailyBar
+from app.models.prediction import Prediction
 
 logger = structlog.get_logger()
 
@@ -56,7 +55,7 @@ async def run_quintile_backtest(
         preds_by_date.setdefault(p.trade_date, []).append(p)
 
     # For each date, assign quintile groups
-    daily_group_returns: dict[str, list[dict]] = {f"Q{i+1}": [] for i in range(5)}
+    daily_group_returns: dict[str, list[dict]] = {f"Q{i + 1}": [] for i in range(5)}
     ic_series = []
     sorted_dates = sorted(preds_by_date.keys())
 
@@ -79,10 +78,12 @@ async def run_quintile_backtest(
         for group in groups:
             rets = await _compute_group_return(db, [p.symbol for p in group], trade_date)
             group_returns.append(rets)
-            daily_group_returns[f"Q{i+1}"].append({
-                "date": str(trade_date),
-                "return": rets,
-            })
+            daily_group_returns[f"Q{i + 1}"].append(
+                {
+                    "date": str(trade_date),
+                    "return": rets,
+                }
+            )
 
         # IC: Spearman correlation between score and forward return
         symbols = [p.symbol for p in preds_sorted]
@@ -92,6 +93,7 @@ async def run_quintile_backtest(
         if len(scores) > 5 and len(fwd_returns) == len(scores):
             try:
                 from scipy.stats import spearmanr
+
                 valid = [(s, r) for s, r in zip(scores, fwd_returns) if r is not None]
                 if len(valid) > 5:
                     s_vals = [v[0] for v in valid]
@@ -112,7 +114,7 @@ async def run_quintile_backtest(
 
         cumulative = 1.0
         for r in rets:
-            cumulative *= (1 + r)
+            cumulative *= 1 + r
 
         metrics[q_name] = {
             "total_return": cumulative - 1,
@@ -159,11 +161,13 @@ async def _compute_group_return(
     end_day = trade_date + timedelta(days=10)
 
     result = await db.execute(
-        select(DailyBar.symbol, DailyBar.close, DailyBar.trade_date).where(
+        select(DailyBar.symbol, DailyBar.close, DailyBar.trade_date)
+        .where(
             DailyBar.symbol.in_(symbols),
             DailyBar.trade_date >= trade_date,
             DailyBar.trade_date <= end_day,
-        ).order_by(DailyBar.symbol, DailyBar.trade_date)
+        )
+        .order_by(DailyBar.symbol, DailyBar.trade_date)
     )
     rows = result.all()
 
@@ -191,11 +195,13 @@ async def _compute_forward_returns(
     end_day = trade_date + timedelta(days=10)
 
     result = await db.execute(
-        select(DailyBar.symbol, DailyBar.close, DailyBar.trade_date).where(
+        select(DailyBar.symbol, DailyBar.close, DailyBar.trade_date)
+        .where(
             DailyBar.symbol.in_(symbols),
             DailyBar.trade_date >= trade_date,
             DailyBar.trade_date <= end_day,
-        ).order_by(DailyBar.symbol, DailyBar.trade_date)
+        )
+        .order_by(DailyBar.symbol, DailyBar.trade_date)
     )
     rows = result.all()
 
@@ -219,10 +225,10 @@ def _sharpe(returns: list[float], periods_per_year: int = 252) -> float:
         return 0.0
     mean_r = sum(returns) / len(returns)
     variance = sum((r - mean_r) ** 2 for r in returns) / (len(returns) - 1)
-    std = variance ** 0.5
+    std = variance**0.5
     if std == 0:
         return 0.0
-    return (mean_r / std) * (periods_per_year ** 0.5)
+    return (mean_r / std) * (periods_per_year**0.5)
 
 
 def _max_drawdown(returns: list[float]) -> float:
@@ -230,7 +236,7 @@ def _max_drawdown(returns: list[float]) -> float:
     peak = 1.0
     max_dd = 0.0
     for r in returns:
-        cumulative *= (1 + r)
+        cumulative *= 1 + r
         if cumulative > peak:
             peak = cumulative
         dd = (cumulative - peak) / peak

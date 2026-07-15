@@ -24,18 +24,19 @@ router = APIRouter()
 
 @router.get("/status", response_model=ResponseBase[SetupStatusResponse])
 async def get_setup_status(user: CurrentUser, db: DBSession):
-    stock_count = await db.scalar(
-        select(func.count(Stock.id)).where(Stock.in_csi300.is_(True))
-    ) or 0
+    stock_count = (
+        await db.scalar(select(func.count(Stock.id)).where(Stock.in_csi300.is_(True))) or 0
+    )
     bar_count = await db.scalar(select(func.count(DailyBar.id))) or 0
     model_count = await db.scalar(select(func.count(ModelVersion.id))) or 0
-    prediction_count = await db.scalar(
-        select(func.count(Prediction.id)).where(Prediction.trade_date == date.today())
-    ) or 0
-
-    latest_result = await db.execute(
-        select(SetupRun).order_by(SetupRun.started_at.desc()).limit(1)
+    prediction_count = (
+        await db.scalar(
+            select(func.count(Prediction.id)).where(Prediction.trade_date == date.today())
+        )
+        or 0
     )
+
+    latest_result = await db.execute(select(SetupRun).order_by(SetupRun.started_at.desc()).limit(1))
     latest_run = latest_result.scalar_one_or_none()
 
     active_result = await db.execute(
@@ -72,9 +73,7 @@ async def get_setup_status(user: CurrentUser, db: DBSession):
             current_stage=latest_run.current_stage,
             stages=latest_run.stages or {},
             started_at=latest_run.started_at.isoformat(),
-            finished_at=(
-                latest_run.finished_at.isoformat() if latest_run.finished_at else None
-            ),
+            finished_at=(latest_run.finished_at.isoformat() if latest_run.finished_at else None),
             error=latest_run.error,
         )
 
@@ -90,11 +89,7 @@ async def get_setup_status(user: CurrentUser, db: DBSession):
         active_model=active_version,
         run=run_item,
         can_start=is_admin and readiness != "initializing",
-        can_run_analysis=(
-            is_admin
-            and readiness == "ready"
-            and running_analysis is None
-        ),
+        can_run_analysis=(is_admin and readiness == "ready" and running_analysis is None),
     )
     return ResponseBase(data=response)
 

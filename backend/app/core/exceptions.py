@@ -1,6 +1,3 @@
-from fastapi import HTTPException, status
-
-
 class AppException(Exception):
     def __init__(self, code: int, message: str, detail: str = ""):
         self.code = code

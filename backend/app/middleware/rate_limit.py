@@ -1,11 +1,10 @@
 import time
 from collections import defaultdict
 
+import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-
-import structlog
 
 logger = structlog.get_logger()
 

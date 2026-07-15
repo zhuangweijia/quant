@@ -1,8 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import bcrypt
-from jose import jwt, JWTError
+from jose import JWTError, jwt
 
 from app.config import get_settings
 
@@ -36,9 +36,7 @@ class AuthService:
     @classmethod
     def create_access_token(cls, user_id: str, role: str) -> str:
         settings = get_settings()
-        expire = datetime.now(timezone.utc) + timedelta(
-            minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES
-        )
+        expire = datetime.now(UTC) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
         payload = {
             "sub": user_id,
             "role": role,
@@ -50,9 +48,7 @@ class AuthService:
     @classmethod
     def create_refresh_token(cls, user_id: str) -> str:
         settings = get_settings()
-        expire = datetime.now(timezone.utc) + timedelta(
-            days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS
-        )
+        expire = datetime.now(UTC) + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
         payload = {"sub": user_id, "exp": expire, "type": "refresh"}
         return jwt.encode(payload, cls._get_private_key(), algorithm=settings.JWT_ALGORITHM)
 
@@ -60,9 +56,7 @@ class AuthService:
     def decode_token(cls, token: str) -> dict | None:
         settings = get_settings()
         try:
-            payload = jwt.decode(
-                token, cls._get_public_key(), algorithms=[settings.JWT_ALGORITHM]
-            )
+            payload = jwt.decode(token, cls._get_public_key(), algorithms=[settings.JWT_ALGORITHM])
             return payload
         except (JWTError, Exception):
             return None

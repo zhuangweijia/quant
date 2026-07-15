@@ -1,8 +1,8 @@
 import os
 import sys
 
-from cryptography.fernet import Fernet, InvalidToken
 import structlog
+from cryptography.fernet import Fernet
 
 from app.config import get_settings
 
@@ -52,8 +52,10 @@ def _validate_jwt_keys(settings, errors: list[str]) -> None:
 
 async def _validate_database(errors: list[str]) -> None:
     try:
-        from app.database import AsyncSessionLocal
         from sqlalchemy import text
+
+        from app.database import AsyncSessionLocal
+
         async with AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
     except Exception as e:

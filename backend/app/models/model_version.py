@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import String, Numeric, Date, DateTime, Boolean, Integer
+from sqlalchemy import Boolean, Date, DateTime, Integer, Numeric, String
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 

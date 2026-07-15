@@ -1,5 +1,6 @@
-from pydantic_settings import BaseSettings
 from functools import lru_cache
+
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -31,7 +32,7 @@ class Settings(BaseSettings):
     ANALYSIS_TIME: str = "17:00"
     ANALYSIS_TIMEZONE: str = "Asia/Shanghai"
     MODEL_TRAIN_WINDOW_DAYS: int = 756  # ~3 years
-    MODEL_VAL_WINDOW_DAYS: int = 126   # ~6 months
+    MODEL_VAL_WINDOW_DAYS: int = 126  # ~6 months
     FORWARD_RETURN_DAYS: int = 5
     FORWARD_RETURN_THRESHOLD: float = 0.02
     MODEL_IC_THRESHOLD: float = 0.02

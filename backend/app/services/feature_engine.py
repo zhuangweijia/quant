@@ -11,32 +11,51 @@ Factor categories:
 """
 
 import asyncio
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
-from io import StringIO
 
 import pandas as pd
 import structlog
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.database import AsyncSessionLocal
-from app.models.stock import Stock
 from app.models.daily_bar import DailyBar
+from app.models.stock import Stock
 from app.models.stock_factor import StockFactor
 
 logger = structlog.get_logger()
 
 FACTOR_COLUMNS = [
-    "return_5d", "return_10d", "return_20d", "return_60d",
-    "excess_return_20d", "momentum_12_1",
-    "pe_ttm", "pb", "ps_ttm", "dividend_yield",
-    "pe_industry_pct", "pb_industry_pct",
-    "roe_ttm", "gross_margin", "debt_ratio", "cashflow_to_profit",
-    "revenue_yoy", "profit_yoy", "revenue_qoq",
-    "turnover_5d_avg", "volatility_20d", "vol_price_corr_20d", "volume_ratio",
-    "rsi_14", "macd_hist", "boll_position", "ma_alignment",
-    "northbound_holding_pct", "northbound_holding_change",
+    "return_5d",
+    "return_10d",
+    "return_20d",
+    "return_60d",
+    "excess_return_20d",
+    "momentum_12_1",
+    "pe_ttm",
+    "pb",
+    "ps_ttm",
+    "dividend_yield",
+    "pe_industry_pct",
+    "pb_industry_pct",
+    "roe_ttm",
+    "gross_margin",
+    "debt_ratio",
+    "cashflow_to_profit",
+    "revenue_yoy",
+    "profit_yoy",
+    "revenue_qoq",
+    "turnover_5d_avg",
+    "volatility_20d",
+    "vol_price_corr_20d",
+    "volume_ratio",
+    "rsi_14",
+    "macd_hist",
+    "boll_position",
+    "ma_alignment",
+    "northbound_holding_pct",
+    "northbound_holding_change",
 ]
 
 
@@ -48,9 +67,7 @@ class FeatureEngine:
     async def compute_all_factors(self, trade_date: date) -> dict:
         """Compute all factors for all CSI 300 stocks on a given date."""
         async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                select(Stock).where(Stock.in_csi300.is_(True))
-            )
+            result = await db.execute(select(Stock).where(Stock.in_csi300.is_(True)))
             stocks = result.scalars().all()
 
         if not stocks:
@@ -77,7 +94,11 @@ class FeatureEngine:
 
                 factors = await asyncio.to_thread(
                     self._compute_factors_for_stock,
-                    bars, csi300_bars, stock, fundamentals, northbound,
+                    bars,
+                    csi300_bars,
+                    stock,
+                    fundamentals,
+                    northbound,
                 )
 
                 if factors:
@@ -85,21 +106,25 @@ class FeatureEngine:
                     computed += 1
 
             except Exception as e:
-                logger.warning("feature_engine.compute_failed",
-                               symbol=stock.symbol, error=str(e))
+                logger.warning("feature_engine.compute_failed", symbol=stock.symbol, error=str(e))
 
             if (i + 1) % 50 == 0:
                 logger.info("feature_engine.progress", done=i + 1, total=total)
 
-        logger.info("feature_engine.completed", trade_date=str(trade_date),
-                     total=total, computed=computed)
+        logger.info(
+            "feature_engine.completed", trade_date=str(trade_date), total=total, computed=computed
+        )
         return {"total": total, "computed": computed}
 
     # ── Factor computation (CPU-bound, run in thread) ─────────────
 
     def _compute_factors_for_stock(
-        self, bars: pd.DataFrame, csi300: pd.DataFrame | None,
-        stock: Stock, fundamentals: dict, northbound: dict,
+        self,
+        bars: pd.DataFrame,
+        csi300: pd.DataFrame | None,
+        stock: Stock,
+        fundamentals: dict,
+        northbound: dict,
     ) -> dict:
         """Compute all factors for one stock. bars is indexed by date, has 'close','high','low','open','volume'."""
         factors = {}
@@ -210,8 +235,7 @@ class FeatureEngine:
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(StockFactor)
-                .where(StockFactor.trade_date >= start_date,
-                       StockFactor.trade_date <= end_date)
+                .where(StockFactor.trade_date >= start_date, StockFactor.trade_date <= end_date)
                 .order_by(StockFactor.trade_date, StockFactor.symbol)
             )
             rows = result.scalars().all()
@@ -239,7 +263,9 @@ class FeatureEngine:
         grouped = factor_df.groupby(level="trade_date")
 
         # Z-score standardization
-        standardized = grouped.transform(lambda x: (x - x.mean()) / x.std() if x.std() > 0 else x * 0)
+        standardized = grouped.transform(
+            lambda x: (x - x.mean()) / x.std() if x.std() > 0 else x * 0
+        )
 
         # Fill NaN with cross-sectional median
         standardized = grouped.transform(lambda x: x.fillna(x.median()))
@@ -271,13 +297,17 @@ class FeatureEngine:
 
         records = []
         for b in reversed(bars):
-            records.append({
-                "date": b.trade_date,
-                "open": float(b.open), "high": float(b.high),
-                "low": float(b.low), "close": float(b.close),
-                "volume": float(b.volume),
-                "turnover_rate": float(b.turnover_rate) if b.turnover_rate else None,
-            })
+            records.append(
+                {
+                    "date": b.trade_date,
+                    "open": float(b.open),
+                    "high": float(b.high),
+                    "low": float(b.low),
+                    "close": float(b.close),
+                    "volume": float(b.volume),
+                    "turnover_rate": float(b.turnover_rate) if b.turnover_rate else None,
+                }
+            )
 
         df = pd.DataFrame(records)
         df = df.set_index("date")
@@ -285,8 +315,10 @@ class FeatureEngine:
 
     async def _load_fundamentals(self, symbols: list[str]) -> dict:
         """Load fundamentals from Redis cache."""
-        import redis.asyncio as aioredis
         import json
+
+        import redis.asyncio as aioredis
+
         from app.config import get_settings
 
         result = {}
@@ -303,6 +335,7 @@ class FeatureEngine:
                         else:
                             # Try ast.literal_eval for Python dict repr
                             import ast
+
                             result[sym] = ast.literal_eval(raw)
                     except Exception:
                         pass
@@ -313,6 +346,7 @@ class FeatureEngine:
     async def _load_northbound(self, symbols: list[str]) -> dict:
         """Load northbound holding from Redis."""
         import redis.asyncio as aioredis
+
         from app.config import get_settings
 
         result = {}
@@ -346,9 +380,7 @@ class FeatureEngine:
             if v is not None and v == v:  # not NaN
                 clean[k] = Decimal(str(round(v, 6)))
 
-        stmt = pg_insert(StockFactor).values(
-            symbol=symbol, trade_date=trade_date, **clean
-        )
+        stmt = pg_insert(StockFactor).values(symbol=symbol, trade_date=trade_date, **clean)
         stmt = stmt.on_conflict_do_update(
             constraint="uq_stock_factors_symbol_date",
             set_=clean,
@@ -358,6 +390,7 @@ class FeatureEngine:
 
 
 # ── Utility functions ────────────────────────────────────────────
+
 
 def _pct_change(series, periods: int):
     """Safe percentage change over N periods."""
@@ -387,6 +420,7 @@ def _safe(val):
         return None
     try:
         import numpy as np
+
         if isinstance(val, (np.integer,)):
             return float(val)
         if isinstance(val, (np.floating,)):

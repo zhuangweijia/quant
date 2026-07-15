@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from sqlalchemy import String, Numeric, Date, Integer, Index, UniqueConstraint
+from sqlalchemy import Date, Index, Integer, Numeric, String, UniqueConstraint
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,7 +11,9 @@ from app.models.base import Base, TimestampMixin
 class Prediction(TimestampMixin, Base):
     __tablename__ = "predictions"
     __table_args__ = (
-        UniqueConstraint("symbol", "trade_date", "model_version", name="uq_predictions_sym_date_ver"),
+        UniqueConstraint(
+            "symbol", "trade_date", "model_version", name="uq_predictions_sym_date_ver"
+        ),
         Index("ix_predictions_date", "trade_date"),
         Index("ix_predictions_date_rank", "trade_date", "rank"),
     )

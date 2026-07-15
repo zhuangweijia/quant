@@ -1,22 +1,22 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import select, func
+from fastapi import APIRouter, HTTPException, Request
+from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
 from app.models.user import User
-from app.schemas.common import ResponseBase
 from app.schemas.auth import (
+    ChangePasswordRequest,
     LoginRequest,
+    RefreshRequest,
     RegisterRequest,
     TokenResponse,
-    RefreshRequest,
     UserResponse,
-    ChangePasswordRequest,
 )
+from app.schemas.common import ResponseBase
+from app.services.audit_service import extract_request_info, log_action
 from app.services.auth_service import AuthService
-from app.services.audit_service import log_action, extract_request_info
 
 router = APIRouter()
 
@@ -42,7 +42,15 @@ async def register(payload: RegisterRequest, db: DBSession, request: Request):
     await db.flush()
 
     ip, ua = extract_request_info(request)
-    await log_action(db, user_id=user.id, action="auth.register", resource_type="user", resource_id=str(user.id), ip_address=ip, user_agent=ua)
+    await log_action(
+        db,
+        user_id=user.id,
+        action="auth.register",
+        resource_type="user",
+        resource_id=str(user.id),
+        ip_address=ip,
+        user_agent=ua,
+    )
 
     return ResponseBase(data=UserResponse.model_validate(user))
 
@@ -55,19 +63,39 @@ async def login(payload: LoginRequest, db: DBSession, request: Request):
     ip, ua = extract_request_info(request)
 
     if user is None:
-        await log_action(db, action="auth.login_failed", detail={"reason": "user_not_found", "username": payload.username}, ip_address=ip, user_agent=ua)
+        await log_action(
+            db,
+            action="auth.login_failed",
+            detail={"reason": "user_not_found", "username": payload.username},
+            ip_address=ip,
+            user_agent=ua,
+        )
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
-    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
-        await log_action(db, user_id=user.id, action="auth.login_failed", detail={"reason": "account_locked"}, ip_address=ip, user_agent=ua)
+    if user.locked_until and user.locked_until > datetime.now(UTC):
+        await log_action(
+            db,
+            user_id=user.id,
+            action="auth.login_failed",
+            detail={"reason": "account_locked"},
+            ip_address=ip,
+            user_agent=ua,
+        )
         raise HTTPException(status_code=423, detail="账号已锁定，请稍后重试")
 
     if not AuthService.verify_password(payload.password, user.hashed_password):
         user.login_failed_count += 1
         if user.login_failed_count >= 5:
-            user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=15)
+            user.locked_until = datetime.now(UTC) + timedelta(minutes=15)
         await db.flush()
-        await log_action(db, user_id=user.id, action="auth.login_failed", detail={"reason": "wrong_password"}, ip_address=ip, user_agent=ua)
+        await log_action(
+            db,
+            user_id=user.id,
+            action="auth.login_failed",
+            detail={"reason": "wrong_password"},
+            ip_address=ip,
+            user_agent=ua,
+        )
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 
     user.login_failed_count = 0

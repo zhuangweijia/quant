@@ -19,11 +19,13 @@ class FakeScalarResult:
 class FakeSetupDB:
     def __init__(self, counts=None, latest_run=None, active_model=None, analysis_run=None):
         self.counts = iter(counts or [0, 0, 0, 0])
-        self.results = iter([
-            FakeScalarResult(latest_run),
-            FakeScalarResult(active_model),
-            FakeScalarResult(analysis_run),
-        ])
+        self.results = iter(
+            [
+                FakeScalarResult(latest_run),
+                FakeScalarResult(active_model),
+                FakeScalarResult(analysis_run),
+            ]
+        )
 
     async def scalar(self, _query):
         return next(self.counts)
@@ -35,10 +37,12 @@ class FakeSetupDB:
 class FakeAnalysisDB:
     def __init__(self, stock_count=300, bar_count=1000, active_model=None, running=None):
         self.counts = iter([stock_count, bar_count])
-        self.results = iter([
-            FakeScalarResult(active_model),
-            FakeScalarResult(running),
-        ])
+        self.results = iter(
+            [
+                FakeScalarResult(active_model),
+                FakeScalarResult(running),
+            ]
+        )
 
     async def scalar(self, _query):
         return next(self.counts)
