@@ -223,10 +223,18 @@ from importlib.util import find_spec
 
 if find_spec("akshare") is None:
     logger.warning("akshare.not_installed")
-    return False
+else:
+    try:
+        provider = AKShareProvider()
+        if provider._ak is None:
+            raise ImportError("akshare failed to import")
+        _providers[market] = provider
+        return provider
+    except ImportError:
+        logger.warning("akshare.not_installed")
 ```
 
-Rename the audit log comprehension variable from `l` to `log`. Do not remove model imports required for SQLAlchemy mapper registration.
+The function must then continue through its existing cached `MockDataProvider` fallback. Rename the audit log comprehension variable from `l` to `log`. Do not remove model imports required for SQLAlchemy mapper registration.
 
 - [ ] **Step 3: Normalize ML locals without changing calculations**
 
