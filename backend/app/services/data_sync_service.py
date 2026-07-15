@@ -366,7 +366,6 @@ class DataSyncService:
                 symbol = str(row.get("股票代码", "")).strip()
                 if not symbol:
                     continue
-                holding_pct = _safe_float(row, "持股数量")
                 holding_ratio = _safe_float(row, "持股比例")
 
                 await r.setex(

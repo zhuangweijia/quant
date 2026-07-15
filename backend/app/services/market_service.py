@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from importlib.util import find_spec
 
 import structlog
 
@@ -275,14 +276,15 @@ def get_provider(market: str) -> MarketDataProvider:
     if market in _providers:
         return _providers[market]
     if market == "a_stock":
-        try:
-            import akshare
-
-            provider = AKShareProvider()
-            _providers[market] = provider
-            return provider
-        except ImportError:
+        if find_spec("akshare") is None:
             logger.warning("akshare.not_installed")
+        else:
+            try:
+                provider = AKShareProvider()
+                _providers[market] = provider
+                return provider
+            except ImportError:
+                logger.warning("akshare.not_installed")
     provider = MockDataProvider()
     _providers[market] = provider
     return provider

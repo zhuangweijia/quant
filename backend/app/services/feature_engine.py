@@ -126,7 +126,10 @@ class FeatureEngine:
         fundamentals: dict,
         northbound: dict,
     ) -> dict:
-        """Compute all factors for one stock. bars is indexed by date, has 'close','high','low','open','volume'."""
+        """Compute all factors for one stock.
+
+        bars is indexed by date and has close, high, low, open, and volume columns.
+        """
         factors = {}
         close = bars["close"]
         volume = bars["volume"]

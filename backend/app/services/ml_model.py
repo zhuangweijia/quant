@@ -215,8 +215,8 @@ class MLModelService:
         logger.info("ml_model.training_start", start=str(start_date), end=str(end_date))
 
         # Build factor matrix
-        X = await fe.build_factor_matrix(start_date, end_date)
-        if X.empty:
+        features = await fe.build_factor_matrix(start_date, end_date)
+        if features.empty:
             raise ValueError("因子矩阵为空，请先同步数据并计算特征")
 
         # Generate labels
@@ -225,38 +225,40 @@ class MLModelService:
             raise ValueError("标签为空，无法训练")
 
         # Align index
-        common_idx = X.index.intersection(y.index)
+        common_idx = features.index.intersection(y.index)
         if len(common_idx) < 100:
             raise ValueError(f"对齐后样本不足: {len(common_idx)}")
 
-        X = X.loc[common_idx]
+        features = features.loc[common_idx]
         y = y.loc[common_idx]
 
         # Walk-forward split
-        dates = sorted(set(X.index.get_level_values("trade_date")))
+        dates = sorted(set(features.index.get_level_values("trade_date")))
         val_cutoff = (
             dates[-settings.MODEL_VAL_WINDOW_DAYS]
             if len(dates) > settings.MODEL_VAL_WINDOW_DAYS
             else dates[len(dates) // 2]
         )
 
-        train_mask = X.index.get_level_values("trade_date") < val_cutoff
+        train_mask = features.index.get_level_values("trade_date") < val_cutoff
         val_mask = ~train_mask
 
-        X_train, y_train = X[train_mask], y[train_mask]
-        X_val, y_val = X[val_mask], y[val_mask]
+        train_features, y_train = features[train_mask], y[train_mask]
+        validation_features, y_val = features[val_mask], y[val_mask]
 
-        if len(X_train) < 50:
-            raise ValueError(f"训练样本不足: {len(X_train)}")
+        if len(train_features) < 50:
+            raise ValueError(f"训练样本不足: {len(train_features)}")
 
         feature_names = fe.get_factor_names()
 
         def _do_train():
             train_data = lgb.Dataset(
-                X_train[feature_names].values, label=y_train.values, feature_name=feature_names
+                train_features[feature_names].values,
+                label=y_train.values,
+                feature_name=feature_names,
             )
             val_data = lgb.Dataset(
-                X_val[feature_names].values,
+                validation_features[feature_names].values,
                 label=y_val.values,
                 feature_name=feature_names,
                 reference=train_data,
@@ -284,11 +286,17 @@ class MLModelService:
         booster = await asyncio.to_thread(_do_train)
 
         # Validation evaluation
-        val_preds = booster.predict(X_val[feature_names].values)
+        val_preds = booster.predict(validation_features[feature_names].values)
         val_p2 = val_preds[:, 2]  # P(outperform)
 
         # IC: Spearman correlation between P(outperform) and actual forward returns
-        val_metrics = await self._evaluate_validation(booster, X_val, y_val, feature_names, val_p2)
+        val_metrics = await self._evaluate_validation(
+            booster,
+            validation_features,
+            y_val,
+            feature_names,
+            val_p2,
+        )
 
         # Save model
         version = f"v{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
@@ -326,12 +334,22 @@ class MLModelService:
             "val_accuracy": val_metrics["accuracy"],
         }
 
-    async def _evaluate_validation(self, booster, X_val, y_val, feature_names, val_p2) -> dict:
+    async def _evaluate_validation(
+        self,
+        booster,
+        validation_features,
+        y_val,
+        feature_names,
+        val_p2,
+    ) -> dict:
         """Evaluate model on validation set."""
         from scipy.stats import spearmanr
 
         # Accuracy
-        val_pred_classes = np.argmax(booster.predict(X_val[feature_names].values), axis=1)
+        val_pred_classes = np.argmax(
+            booster.predict(validation_features[feature_names].values),
+            axis=1,
+        )
         accuracy = float((val_pred_classes == y_val.values).mean())
 
         # IC (use actual labels as proxy if forward returns not available)
@@ -349,8 +367,6 @@ class MLModelService:
         """Generate predictions for all CSI 300 stocks on trade_date."""
         import lightgbm as lgb
 
-        settings = get_settings()
-
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(ModelVersion).where(ModelVersion.is_active.is_(True)).limit(1)
@@ -366,8 +382,8 @@ class MLModelService:
         fe = FeatureEngine()
 
         # Get factors for trade_date
-        X = await fe.build_factor_matrix(trade_date, trade_date)
-        if X.empty:
+        features = await fe.build_factor_matrix(trade_date, trade_date)
+        if features.empty:
             logger.warning("ml_model.no_factors_for_date", date=str(trade_date))
             return None
 
@@ -375,7 +391,7 @@ class MLModelService:
         booster = lgb.Booster(model_file=active_model.file_path)
 
         def _do_predict():
-            preds = booster.predict(X[feature_names].values)
+            preds = booster.predict(features[feature_names].values)
             return preds
 
         preds = await asyncio.to_thread(_do_predict)
@@ -385,12 +401,7 @@ class MLModelService:
 
         # Save predictions
         async with AsyncSessionLocal() as db:
-            from app.models.stock import Stock
-
-            stock_result = await db.execute(select(Stock))
-            stock_names = {s.symbol: s.name for s in stock_result.scalars().all()}
-
-            for i, (idx) in enumerate(X.index):
+            for i, (idx) in enumerate(features.index):
                 symbol = idx[1] if isinstance(idx, tuple) else idx
                 pred = Prediction(
                     symbol=symbol,
@@ -411,8 +422,6 @@ class MLModelService:
         """Generate SHAP explanations for predictions on trade_date."""
         import lightgbm as lgb
         import shap
-
-        settings = get_settings()
 
         async with AsyncSessionLocal() as db:
             result = await db.execute(
@@ -435,8 +444,8 @@ class MLModelService:
         from app.services.feature_engine import FeatureEngine
 
         fe = FeatureEngine()
-        X = await fe.build_factor_matrix(trade_date, trade_date)
-        if X.empty:
+        features = await fe.build_factor_matrix(trade_date, trade_date)
+        if features.empty:
             return None
 
         feature_names = fe.get_factor_names()
@@ -444,7 +453,7 @@ class MLModelService:
 
         def _compute_shap():
             explainer = shap.TreeExplainer(booster)
-            shap_values = explainer.shap_values(X[feature_names].values)
+            shap_values = explainer.shap_values(features[feature_names].values)
             # For multiclass, shap_values is a list of arrays (one per class)
             # Sum across classes for overall importance
             if isinstance(shap_values, list):
@@ -462,15 +471,15 @@ class MLModelService:
                 if i >= len(sv):
                     break
 
-                # Find the row in X for this symbol
+                # Find the row in the feature matrix for this symbol
                 symbol = pred.symbol
                 try:
-                    row_idx = list(X.index.get_level_values("symbol")).index(symbol)
+                    row_idx = list(features.index.get_level_values("symbol")).index(symbol)
                 except ValueError:
                     continue
 
                 shap_row = sv[row_idx]
-                factor_vals = X.iloc[row_idx]
+                factor_vals = features.iloc[row_idx]
 
                 # Top 3 positive, top 2 negative
                 sorted_idx = np.argsort(shap_row)
@@ -551,8 +560,6 @@ class MLModelService:
 
     async def check_model_confidence(self):
         """Check rolling 20-day IC, mark low confidence if needed."""
-        settings = get_settings()
-
         async with AsyncSessionLocal() as db:
             cutoff = date.today() - timedelta(days=30)
             result = await db.execute(

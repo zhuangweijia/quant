@@ -227,7 +227,7 @@ async def list_audit_logs(
     total_pages = (total + page_size - 1) // page_size if total else 0
     return ResponseBase(
         data=AuditLogListResponse(
-            items=[AuditLogResponse.model_validate(l) for l in logs],
+            items=[AuditLogResponse.model_validate(log) for log in logs],
             total=total or 0,
             page=page,
             page_size=page_size,

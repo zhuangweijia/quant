@@ -156,7 +156,6 @@ async def _compute_group_return(
     if not symbols:
         return None
 
-    next_day = trade_date + timedelta(days=1)
     # Look for returns over 5 trading days
     end_day = trade_date + timedelta(days=10)
 
