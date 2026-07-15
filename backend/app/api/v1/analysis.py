@@ -1,12 +1,15 @@
 """Analysis pipeline API — trigger and status."""
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DBSession
+from app.models.analysis_run import AnalysisRun
+from app.models.daily_bar import DailyBar
+from app.models.model_version import ModelVersion
+from app.models.stock import Stock
 from app.schemas.common import ResponseBase
 from app.schemas.model import AnalysisStatusResponse, AnalysisTriggerResponse
-from app.models.analysis_run import AnalysisRun
 
 router = APIRouter()
 
@@ -15,6 +18,30 @@ router = APIRouter()
 async def trigger_analysis(user: CurrentUser, db: DBSession):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可触发分析")
+
+    stock_count = await db.scalar(
+        select(func.count(Stock.id)).where(Stock.in_csi300.is_(True))
+    ) or 0
+    bar_count = await db.scalar(select(func.count(DailyBar.id))) or 0
+    if stock_count <= 0 or bar_count <= 0:
+        raise HTTPException(status_code=409, detail="请先完成市场数据初始化")
+
+    active_result = await db.execute(
+        select(ModelVersion.version)
+        .where(ModelVersion.is_active.is_(True))
+        .limit(1)
+    )
+    if active_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=409, detail="请先训练并激活模型")
+
+    running_result = await db.execute(
+        select(AnalysisRun).where(AnalysisRun.status == "running").limit(1)
+    )
+    running = running_result.scalar_one_or_none()
+    if running:
+        return ResponseBase(
+            data=AnalysisTriggerResponse(run_id=running.run_id, status="running")
+        )
 
     from app.services.analysis_pipeline import analysis_pipeline
     run_id = await analysis_pipeline.trigger("manual")

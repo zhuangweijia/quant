@@ -1,7 +1,18 @@
 from fastapi import APIRouter
 
-from app.api.v1 import auth, market, dashboard, settings, watchlist, admin
-from app.api.v1 import ranking, stock_detail, model, analysis
+from app.api.v1 import (
+    admin,
+    analysis,
+    auth,
+    dashboard,
+    market,
+    model,
+    ranking,
+    settings,
+    setup,
+    stock_detail,
+    watchlist,
+)
 
 router = APIRouter()
 
@@ -15,3 +26,4 @@ router.include_router(ranking.router, prefix="/rankings", tags=["排名"])
 router.include_router(stock_detail.router, prefix="/stocks", tags=["个股"])
 router.include_router(model.router, prefix="/model", tags=["模型"])
 router.include_router(analysis.router, prefix="/analysis", tags=["分析"])
+router.include_router(setup.router, prefix="/setup", tags=["首次配置"])
