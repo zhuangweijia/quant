@@ -281,6 +281,8 @@ def get_provider(market: str) -> MarketDataProvider:
         else:
             try:
                 provider = AKShareProvider()
+                if provider._ak is None:
+                    raise ImportError("akshare failed to import")
                 _providers[market] = provider
                 return provider
             except ImportError:
