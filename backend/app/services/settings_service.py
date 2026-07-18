@@ -2,7 +2,7 @@ from collections.abc import Mapping
 
 import structlog
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -145,8 +145,43 @@ async def get_system_params(db: AsyncSession) -> SystemParams:
 
 
 async def save_system_params(db: AsyncSession, params: SystemParams) -> SystemParams:
-    for key, value in params.model_dump().items():
-        await set_setting(db, None, "system", key, str(value))
+    rows = [
+        {
+            "user_id": None,
+            "category": "system",
+            "key": key,
+            "value": str(value),
+            "encrypted": False,
+        }
+        for key, value in params.model_dump().items()
+    ]
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    elif dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+    else:
+        for row in rows:
+            await set_setting(
+                db,
+                row["user_id"],
+                row["category"],
+                row["key"],
+                row["value"],
+            )
+        return await get_system_params(db)
+
+    statement = insert(Setting).values(rows)
+    statement = statement.on_conflict_do_update(
+        index_elements=[Setting.category, Setting.key],
+        index_where=Setting.user_id.is_(None),
+        set_={
+            "value": statement.excluded.value,
+            "encrypted": statement.excluded.encrypted,
+            "updated_at": func.now(),
+        },
+    )
+    await db.execute(statement)
     return await get_system_params(db)
 
 

@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Index, String, Text, UniqueConstraint, text
 from sqlalchemy import Uuid as UuidType
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -11,6 +11,14 @@ class Setting(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "settings"
     __table_args__ = (
         UniqueConstraint("user_id", "category", "key", name="uq_settings_user_cat_key"),
+        Index(
+            "uq_settings_global_cat_key",
+            "category",
+            "key",
+            unique=True,
+            postgresql_where=text("user_id IS NULL"),
+            sqlite_where=text("user_id IS NULL"),
+        ),
     )
 
     user_id: Mapped[uuid.UUID | None] = mapped_column(
