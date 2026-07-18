@@ -1,24 +1,16 @@
+from collections.abc import Mapping
+
 import structlog
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.security import Encryption
 from app.models.setting import Setting
+from app.schemas.settings import SystemParams
 
 logger = structlog.get_logger()
-
-_DEFAULT_PARAMS = {
-    "data_retention_days": "90",
-    "alert_retention_days": "90",
-    "model_train_window_days": "756",
-    "model_val_window_days": "126",
-    "forward_return_days": "5",
-    "forward_return_threshold": "0.02",
-    "model_ic_threshold": "0.02",
-    "stock_universe": "csi300",
-    "analysis_time": "17:00",
-}
-
 
 async def get_setting(db: AsyncSession, user_id: str | None, category: str, key: str) -> str | None:
     result = await db.execute(
@@ -97,28 +89,68 @@ async def get_settings_category(db: AsyncSession, user_id: str | None, category:
     return data
 
 
-async def get_system_params(db: AsyncSession) -> dict:
+def get_default_system_params() -> SystemParams:
+    settings = get_settings()
+    return SystemParams(
+        data_retention_days=90,
+        alert_retention_days=90,
+        model_train_window_days=settings.MODEL_TRAIN_WINDOW_DAYS,
+        model_val_window_days=settings.MODEL_VAL_WINDOW_DAYS,
+        forward_return_days=settings.FORWARD_RETURN_DAYS,
+        forward_return_threshold=settings.FORWARD_RETURN_THRESHOLD,
+        model_ic_threshold=settings.MODEL_IC_THRESHOLD,
+        stock_universe=settings.STOCK_UNIVERSE,
+        analysis_time=settings.ANALYSIS_TIME,
+    )
+
+
+def merge_system_params(
+    overrides: Mapping[str, str],
+    defaults: SystemParams | None = None,
+) -> SystemParams:
+    default_params = defaults or get_default_system_params()
+    default_data = default_params.model_dump()
+    candidate = {
+        **default_data,
+        **{key: value for key, value in overrides.items() if key in default_data},
+    }
+
+    for _ in range(len(default_data) + 1):
+        try:
+            return SystemParams.model_validate(candidate)
+        except ValidationError as exc:
+            invalid_fields = {error["loc"][0] for error in exc.errors() if error["loc"]}
+            if not invalid_fields:
+                logger.error("settings.params_invalid", errors=exc.errors())
+                return default_params
+            for field in invalid_fields:
+                logger.error("settings.param_invalid", key=field, value=candidate.get(field))
+                candidate[field] = default_data[field]
+    return default_params
+
+
+async def get_system_params(db: AsyncSession) -> SystemParams:
     result = await db.execute(
         select(Setting).where(
             Setting.user_id.is_(None),
             Setting.category == "system",
         )
     )
-    settings = result.scalars().all()
-    data = dict(_DEFAULT_PARAMS)
-    for s in settings:
-        data[s.key] = s.value
-    return data
+    overrides = {
+        setting.key: setting.value
+        for setting in result.scalars().all()
+        if setting.value is not None
+    }
+    return merge_system_params(overrides)
 
 
-async def save_system_params(db: AsyncSession, params: dict) -> dict:
-    for key, value in params.items():
-        if key in _DEFAULT_PARAMS:
-            await set_setting(db, None, "system", key, str(value))
+async def save_system_params(db: AsyncSession, params: SystemParams) -> SystemParams:
+    for key, value in params.model_dump().items():
+        await set_setting(db, None, "system", key, str(value))
     return await get_system_params(db)
 
 
-async def reset_system_params(db: AsyncSession) -> dict:
+async def reset_system_params(db: AsyncSession) -> SystemParams:
     result = await db.execute(
         select(Setting).where(
             Setting.user_id.is_(None),
@@ -128,4 +160,11 @@ async def reset_system_params(db: AsyncSession) -> dict:
     for s in result.scalars().all():
         await db.delete(s)
     await db.flush()
-    return dict(_DEFAULT_PARAMS)
+    return get_default_system_params()
+
+
+async def load_runtime_system_params() -> SystemParams:
+    from app.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        return await get_system_params(db)
