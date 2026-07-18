@@ -67,6 +67,15 @@ class AnalysisPipeline:
 
             data_sync_service.register_schedules(self._scheduler)
 
+            from app.services.cleanup_service import run_cleanup
+
+            self._scheduler.add_job(
+                run_cleanup,
+                trigger=CronTrigger(hour=3, minute=30, timezone="Asia/Shanghai"),
+                id="daily_cleanup",
+                replace_existing=True,
+            )
+
             logger.info("analysis_pipeline.started", analysis_time=analysis_time)
 
     def stop(self):

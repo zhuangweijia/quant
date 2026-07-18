@@ -1,11 +1,12 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from app.api.v1 import model as model_api
 from app.schemas.settings import SystemParams
-from app.services.cleanup_service import retention_days_by_table
+from app.services import cleanup_service
+from app.services.cleanup_service import retention_days_by_table, run_cleanup
 from app.services.ml_model import classify_relative_return, validation_cutoff
 
 
@@ -45,6 +46,39 @@ def test_cleanup_uses_runtime_retention_values():
         "market_data": 45,
         "audit_logs": 45,
     }
+
+
+@pytest.mark.asyncio
+async def test_scheduled_cleanup_loads_the_current_runtime_snapshot(monkeypatch):
+    runtime = params(data_retention_days=45, alert_retention_days=120)
+
+    class EmptyResult:
+        def scalar(self):
+            return 0
+
+    class FakeSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def execute(self, _statement):
+            return EmptyResult()
+
+        async def rollback(self):
+            return None
+
+    monkeypatch.setattr("app.database.AsyncSessionLocal", FakeSession)
+    load_params = AsyncMock(return_value=runtime)
+    monkeypatch.setattr("app.services.settings_service.get_system_params", load_params)
+    retention = Mock(wraps=retention_days_by_table)
+    monkeypatch.setattr(cleanup_service, "retention_days_by_table", retention)
+
+    await run_cleanup()
+
+    load_params.assert_awaited_once()
+    retention.assert_called_once_with(runtime)
 
 
 @pytest.mark.asyncio

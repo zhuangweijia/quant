@@ -152,3 +152,22 @@ def test_analysis_pipeline_parses_and_replaces_daily_schedule():
 
     assert pipeline.scheduled["id"] == "analysis_pipeline_daily"
     assert str(pipeline.scheduled["trigger"]).startswith("cron[hour='18', minute='15'")
+
+
+def test_analysis_pipeline_registers_daily_cleanup(monkeypatch):
+    from app.services.data_sync_service import data_sync_service
+
+    pipeline = AnalysisPipeline()
+    jobs = {}
+    pipeline._scheduler.start = lambda: None
+    pipeline._scheduler.add_job = lambda func, **kwargs: jobs.update(
+        {kwargs["id"]: (func, kwargs)}
+    )
+    monkeypatch.setattr(data_sync_service, "register_schedules", lambda _scheduler: None)
+
+    pipeline.start("17:00")
+
+    cleanup_func, cleanup_job = jobs["daily_cleanup"]
+    assert cleanup_func.__name__ == "run_cleanup"
+    assert cleanup_job["replace_existing"] is True
+    assert str(cleanup_job["trigger"]).startswith("cron[hour='3', minute='30'")
