@@ -108,3 +108,44 @@ async def test_send_webhook_uses_the_pinned_target_without_redirects(monkeypatch
     assert captured["kwargs"]["headers"]["Host"] == target.host_header
     assert captured["kwargs"]["extensions"] == {"sni_hostname": target.sni_hostname}
     assert captured["send_kwargs"] == {"follow_redirects": False}
+
+
+@pytest.mark.asyncio
+async def test_disabled_email_string_does_not_send_or_log(monkeypatch):
+    monkeypatch.setattr(
+        notification_service.settings_service,
+        "get_settings_category",
+        AsyncMock(return_value={"email_enabled": "false"}),
+    )
+    log_notification = AsyncMock()
+    monkeypatch.setattr(notification_service, "_log_notification", log_notification)
+
+    sent = await notification_service.send_email(
+        SimpleNamespace(), "user-1", "subject", "body"
+    )
+
+    assert sent is False
+    log_notification.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_disabled_webhook_string_does_not_resolve_or_send(monkeypatch):
+    monkeypatch.setattr(
+        notification_service.settings_service,
+        "get_settings_category",
+        AsyncMock(
+            return_value={
+                "webhook_enabled": "false",
+                "webhook_url": "https://hooks.example.com/events",
+            }
+        ),
+    )
+    resolver = AsyncMock()
+    monkeypatch.setattr(notification_service, "resolve_public_webhook_target", resolver)
+
+    sent = await notification_service.send_webhook(
+        SimpleNamespace(), "user-1", "test", {"message": "ok"}
+    )
+
+    assert sent is False
+    resolver.assert_not_awaited()

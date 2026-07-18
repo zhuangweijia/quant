@@ -13,7 +13,7 @@ logger = structlog.get_logger()
 
 async def send_email(db: AsyncSession, user_id: str, subject: str, body: str) -> bool:
     config = await settings_service.get_settings_category(db, user_id, "notification")
-    if not config.get("email_enabled"):
+    if str(config.get("email_enabled", "false")).lower() != "true":
         return False
 
     smtp_host = config.get("email_smtp_host", "")
@@ -62,7 +62,7 @@ async def send_email(db: AsyncSession, user_id: str, subject: str, body: str) ->
 
 async def send_webhook(db: AsyncSession, user_id: str, event_type: str, data: dict) -> bool:
     config = await settings_service.get_settings_category(db, user_id, "notification")
-    if not config.get("webhook_enabled"):
+    if str(config.get("webhook_enabled", "false")).lower() != "true":
         return False
 
     url = config.get("webhook_url", "")
