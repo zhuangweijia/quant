@@ -18,7 +18,8 @@ export function apiErrorFromAxios(error: AxiosError): ApiError {
   const body = error.response?.data as
     | { message?: string; detail?: unknown }
     | undefined;
-  const message = body?.message || error.message || "网络错误";
+  const detailMessage = typeof body?.detail === "string" ? body.detail : undefined;
+  const message = body?.message || detailMessage || error.message || "网络错误";
   return new ApiError(message, body?.detail);
 }
 
