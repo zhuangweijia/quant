@@ -44,9 +44,11 @@ async def trigger_training(user: CurrentUser, db: DBSession):
         raise HTTPException(status_code=403, detail="仅管理员可触发训练")
 
     from app.services.ml_model import ml_model_service
+    from app.services.settings_service import get_system_params
 
     try:
-        result = await ml_model_service.train()
+        runtime_params = await get_system_params(db)
+        result = await ml_model_service.train(runtime_params)
         return ResponseBase(
             data=TrainResponse(
                 version=result.get("version", ""),
@@ -64,9 +66,11 @@ async def activate_model(version: str, user: CurrentUser, db: DBSession):
         raise HTTPException(status_code=403, detail="仅管理员可激活模型")
 
     from app.services.ml_model import ml_model_service
+    from app.services.settings_service import get_system_params
 
     try:
-        await ml_model_service.activate_model(db, version)
+        runtime_params = await get_system_params(db)
+        await ml_model_service.activate_model(db, version, runtime_params)
         return ResponseBase(data={"version": version, "activated": True})
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

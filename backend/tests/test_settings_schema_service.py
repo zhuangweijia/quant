@@ -35,6 +35,13 @@ def test_system_params_reject_unknown_keys():
         SystemParams.model_validate({**valid_params(), "unused_flag": True})
 
 
+def test_system_params_snapshot_is_immutable():
+    params = SystemParams.model_validate(valid_params())
+
+    with pytest.raises(ValidationError, match="frozen"):
+        params.analysis_time = "18:15"
+
+
 def test_merge_system_params_coerces_database_strings():
     defaults = SystemParams.model_validate(valid_params())
 

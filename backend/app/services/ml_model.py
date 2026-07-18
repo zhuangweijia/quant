@@ -24,6 +24,7 @@ from app.database import AsyncSessionLocal
 from app.models.daily_bar import DailyBar
 from app.models.model_version import ModelVersion
 from app.models.prediction import Prediction
+from app.schemas.settings import SystemParams
 
 logger = structlog.get_logger()
 
@@ -104,16 +105,33 @@ FACTOR_TEMPLATES = {
 }
 
 
+def classify_relative_return(relative_return: float, params: SystemParams) -> int:
+    if relative_return > params.forward_return_threshold:
+        return 2
+    if relative_return < -params.forward_return_threshold:
+        return 0
+    return 1
+
+
+def validation_cutoff(dates: list, params: SystemParams):
+    if len(dates) > params.model_val_window_days:
+        return dates[-params.model_val_window_days]
+    return dates[len(dates) // 2]
+
+
 class MLModelService:
     """LightGBM stock selection model with SHAP explanations."""
 
     # ── Label Generation ──────────────────────────────────────────
 
-    async def generate_labels(self, start_date: date, end_date: date) -> pd.Series:
+    async def generate_labels(
+        self,
+        start_date: date,
+        end_date: date,
+        params: SystemParams,
+    ) -> pd.Series:
         """Generate 3-class labels from forward 5-day relative returns."""
-        settings = get_settings()
-        fwd_days = settings.FORWARD_RETURN_DAYS
-        threshold = settings.FORWARD_RETURN_THRESHOLD
+        fwd_days = params.forward_return_days
 
         async with AsyncSessionLocal() as db:
             # Load all daily bars for CSI 300 stocks in range (+ fwd_days buffer)
@@ -174,23 +192,13 @@ class MLModelService:
                 idx_ret = idx_returns.get(td)
                 if idx_ret is not None:
                     rel = stock_ret - idx_ret
-                    if rel > threshold:
-                        final_labels[(sym, td)] = 2  # outperform
-                    elif rel < -threshold:
-                        final_labels[(sym, td)] = 0  # underperform
-                    else:
-                        final_labels[(sym, td)] = 1  # neutral
+                    final_labels[(sym, td)] = classify_relative_return(rel, params)
                 else:
                     final_labels[(sym, td)] = 1
         else:
             final_labels = {}
             for (sym, td), stock_ret in labels.items():
-                if stock_ret > threshold:
-                    final_labels[(sym, td)] = 2
-                elif stock_ret < -threshold:
-                    final_labels[(sym, td)] = 0
-                else:
-                    final_labels[(sym, td)] = 1
+                final_labels[(sym, td)] = classify_relative_return(stock_ret, params)
 
         s = pd.Series(final_labels, name="label")
         s.index.names = ["symbol", "trade_date"]
@@ -198,18 +206,22 @@ class MLModelService:
 
     # ── Training ──────────────────────────────────────────────────
 
-    async def train(self) -> dict:
+    async def train(self, params: SystemParams | None = None) -> dict:
         """Train a new model version with walk-forward validation."""
         import lightgbm as lgb
 
-        settings = get_settings()
+        if params is None:
+            from app.services.settings_service import load_runtime_system_params
+
+            params = await load_runtime_system_params()
+        boot_settings = get_settings()
 
         from app.services.feature_engine import FeatureEngine
 
         fe = FeatureEngine()
 
         end_date = date.today()
-        total_window = settings.MODEL_TRAIN_WINDOW_DAYS + settings.MODEL_VAL_WINDOW_DAYS
+        total_window = params.model_train_window_days + params.model_val_window_days
         start_date = end_date - timedelta(days=int(total_window * 1.5))
 
         logger.info("ml_model.training_start", start=str(start_date), end=str(end_date))
@@ -220,7 +232,7 @@ class MLModelService:
             raise ValueError("因子矩阵为空，请先同步数据并计算特征")
 
         # Generate labels
-        y = await self.generate_labels(start_date, end_date)
+        y = await self.generate_labels(start_date, end_date, params)
         if y.empty:
             raise ValueError("标签为空，无法训练")
 
@@ -234,11 +246,7 @@ class MLModelService:
 
         # Walk-forward split
         dates = sorted(set(features.index.get_level_values("trade_date")))
-        val_cutoff = (
-            dates[-settings.MODEL_VAL_WINDOW_DAYS]
-            if len(dates) > settings.MODEL_VAL_WINDOW_DAYS
-            else dates[len(dates) // 2]
-        )
+        val_cutoff = validation_cutoff(dates, params)
 
         train_mask = features.index.get_level_values("trade_date") < val_cutoff
         val_mask = ~train_mask
@@ -264,7 +272,7 @@ class MLModelService:
                 reference=train_data,
             )
 
-            params = {
+            lgb_params = {
                 "objective": "multiclass",
                 "num_class": 3,
                 "n_estimators": 200,
@@ -276,7 +284,7 @@ class MLModelService:
             }
 
             booster = lgb.train(
-                params,
+                lgb_params,
                 train_data,
                 valid_sets=[val_data],
                 callbacks=[lgb.log_evaluation(0)],
@@ -300,7 +308,9 @@ class MLModelService:
 
         # Save model
         version = f"v{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
-        model_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), settings.MODEL_DIR)
+        model_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), boot_settings.MODEL_DIR
+        )
         os.makedirs(model_dir, exist_ok=True)
         file_path = os.path.join(model_dir, f"model_{version}.txt")
         booster.save_model(file_path)
@@ -532,9 +542,17 @@ class MLModelService:
 
     # ── Model Activation ──────────────────────────────────────────
 
-    async def activate_model(self, db: AsyncSession, version: str):
+    async def activate_model(
+        self,
+        db: AsyncSession,
+        version: str,
+        params: SystemParams | None = None,
+    ):
         """Activate a model version with validation gate."""
-        settings = get_settings()
+        if params is None:
+            from app.services.settings_service import get_system_params
+
+            params = await get_system_params(db)
 
         result = await db.execute(select(ModelVersion).where(ModelVersion.version == version))
         mv = result.scalar_one_or_none()
@@ -542,10 +560,10 @@ class MLModelService:
             raise ValueError(f"模型版本 {version} 不存在")
 
         # Validation gate: IC must meet threshold
-        if mv.ic is None or float(mv.ic) < settings.MODEL_IC_THRESHOLD:
+        if mv.ic is None or float(mv.ic) < params.model_ic_threshold:
             raise ValueError(
                 f"模型验证不达标: IC={float(mv.ic) if mv.ic else 'N/A'} "
-                f"< 阈值 {settings.MODEL_IC_THRESHOLD}，请先运行回测验证"
+                f"< 阈值 {params.model_ic_threshold}，请先运行回测验证"
             )
 
         # Deactivate all others

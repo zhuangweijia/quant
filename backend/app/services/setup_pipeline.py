@@ -177,16 +177,21 @@ class SqlAlchemySetupStore:
 
 
 class ModelSetupAdapter:
-    async def train(self) -> dict:
+    async def load_params(self):
+        from app.services.settings_service import load_runtime_system_params
+
+        return await load_runtime_system_params()
+
+    async def train(self, params) -> dict:
         from app.services.ml_model import ml_model_service
 
-        return await ml_model_service.train()
+        return await ml_model_service.train(params)
 
-    async def activate(self, version: str) -> None:
+    async def activate(self, version: str, params) -> None:
         from app.services.ml_model import ml_model_service
 
         async with AsyncSessionLocal() as db:
-            await ml_model_service.activate_model(db, version)
+            await ml_model_service.activate_model(db, version, params)
             await db.commit()
 
 
@@ -233,6 +238,7 @@ class SetupPipeline:
 
     async def _run(self, run_id: str) -> None:
         try:
+            runtime_params = await self.model_service.load_params()
 
             async def constituents():
                 result = await self.data_sync.sync_csi300_constituents()
@@ -301,7 +307,7 @@ class SetupPipeline:
                 version = await self.store.get_reusable_model_version()
                 if version:
                     return {"version": version, "reused": True}
-                result = await self.model_service.train()
+                result = await self.model_service.train(runtime_params)
                 version = result.get("version")
                 if not version:
                     raise RuntimeError("模型训练未返回版本号")
@@ -311,7 +317,7 @@ class SetupPipeline:
 
             async def activation():
                 if not active_version:
-                    await self.model_service.activate(version)
+                    await self.model_service.activate(version, runtime_params)
                 return {"version": version, "reused": bool(active_version)}
 
             await self._run_stage(run_id, "activation", activation)

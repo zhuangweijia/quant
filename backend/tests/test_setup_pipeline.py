@@ -88,13 +88,21 @@ class RaisingDailyBarSync(FakeDataSync):
 class FakeModel:
     def __init__(self, activation_error=None):
         self.calls = []
+        self.param_calls = []
+        self.runtime_params = object()
         self.activation_error = activation_error
 
-    async def train(self):
+    async def load_params(self):
+        self.calls.append("load_params")
+        return self.runtime_params
+
+    async def train(self, params):
+        self.param_calls.append(("training", params))
         self.calls.append("training")
         return {"version": "model_v1", "ic": 0.05, "val_accuracy": 0.6}
 
-    async def activate(self, version):
+    async def activate(self, version, params):
+        self.param_calls.append(("activation", params))
         self.calls.append(f"activation:{version}")
         if self.activation_error:
             raise ValueError(self.activation_error)
@@ -138,8 +146,21 @@ async def test_setup_pipeline_runs_all_stages_in_order():
         "fundamentals",
         "validation",
     ]
-    assert model.calls == ["training", "activation:model_v1"]
+    assert model.calls == ["load_params", "training", "activation:model_v1"]
     assert analysis.calls == ["analysis:setup"]
+
+
+@pytest.mark.asyncio
+async def test_setup_pipeline_reuses_one_model_snapshot():
+    model = FakeModel()
+    pipeline = SetupPipeline(FakeStore(), FakeDataSync(), model, FakeAnalysis())
+
+    await pipeline.start(wait=True)
+
+    assert model.param_calls == [
+        ("training", model.runtime_params),
+        ("activation", model.runtime_params),
+    ]
 
 
 @pytest.mark.asyncio

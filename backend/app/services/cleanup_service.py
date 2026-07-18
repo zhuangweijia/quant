@@ -4,9 +4,20 @@ from datetime import UTC, datetime, timedelta
 import structlog
 from sqlalchemy import delete, func, select
 
+from app.schemas.settings import SystemParams
+
 logger = structlog.get_logger()
 
 _BATCH_SIZE = 5000
+
+
+def retention_days_by_table(params: SystemParams) -> dict[str, int]:
+    return {
+        "alerts": params.alert_retention_days,
+        "notification_logs": params.data_retention_days,
+        "market_data": params.data_retention_days,
+        "audit_logs": params.data_retention_days,
+    }
 
 
 async def run_cleanup():
@@ -19,20 +30,23 @@ async def run_cleanup():
     try:
         async with AsyncSessionLocal() as db:
             params = await get_system_params(db)
-            data_retention = int(params.get("data_retention_days", 30))
-            alert_retention = int(params.get("alert_retention_days", 90))
-            log_retention = data_retention
+            retention = retention_days_by_table(params)
 
             tables_config = [
-                ("alerts", "app.models.alert", "Alert", alert_retention),
+                ("alerts", "app.models.alert", "Alert", retention["alerts"]),
                 (
                     "notification_logs",
                     "app.models.notification_log",
                     "NotificationLog",
-                    log_retention,
+                    retention["notification_logs"],
                 ),
-                ("market_data", "app.models.market_data", "MarketData", data_retention),
-                ("audit_logs", "app.models.audit_log", "AuditLog", log_retention),
+                (
+                    "market_data",
+                    "app.models.market_data",
+                    "MarketData",
+                    retention["market_data"],
+                ),
+                ("audit_logs", "app.models.audit_log", "AuditLog", retention["audit_logs"]),
             ]
 
             for table_name, module_path, class_name, retention_days in tables_config:

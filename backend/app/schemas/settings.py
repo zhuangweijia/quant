@@ -39,6 +39,8 @@ class NotificationConfigResponse(StrictSettingsModel):
 
 
 class SystemParams(StrictSettingsModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     data_retention_days: int = Field(ge=7, le=3650)
     alert_retention_days: int = Field(ge=7, le=3650)
     model_train_window_days: int = Field(ge=252, le=2520)
