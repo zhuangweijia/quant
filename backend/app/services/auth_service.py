@@ -5,6 +5,7 @@ import bcrypt
 from jose import JWTError, jwt
 
 from app.config import get_settings
+from app.core.passwords import validate_bcrypt_password_size
 
 
 class AuthService:
@@ -27,11 +28,16 @@ class AuthService:
 
     @classmethod
     def hash_password(cls, password: str) -> str:
+        validate_bcrypt_password_size(password)
         return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(12)).decode("utf-8")
 
     @classmethod
     def verify_password(cls, plain: str, hashed: str) -> bool:
-        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+        try:
+            validate_bcrypt_password_size(plain)
+            return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+        except ValueError:
+            return False
 
     @classmethod
     def create_access_token(cls, user_id: str, role: str) -> str:
