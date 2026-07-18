@@ -5,6 +5,7 @@ import structlog
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.services.settings_service as settings_service
+from app.core.webhook_security import resolve_public_webhook_target
 from app.models.notification_log import NotificationLog
 
 logger = structlog.get_logger()
@@ -84,8 +85,18 @@ async def send_webhook(db: AsyncSession, user_id: str, event_type: str, data: di
             signature = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
             headers["X-Signature"] = signature
 
+        target = await resolve_public_webhook_target(url)
+        headers["Host"] = target.host_header
         async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=data, headers=headers, timeout=10)
+            request = client.build_request(
+                "POST",
+                target.request_url,
+                json=data,
+                headers=headers,
+                timeout=10,
+                extensions={"sni_hostname": target.sni_hostname},
+            )
+            resp = await client.send(request, follow_redirects=False)
 
         if resp.status_code < 400:
             await _log_notification(

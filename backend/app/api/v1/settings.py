@@ -44,6 +44,17 @@ async def get_notifications(user: CurrentUser, db: DBSession):
 
 @router.put("/notifications", response_model=ResponseBase[dict])
 async def save_notifications(user: CurrentUser, db: DBSession, payload: NotificationConfigRequest):
+    if payload.webhook_url:
+        from app.core.webhook_security import (
+            UnsafeWebhookURLError,
+            resolve_public_webhook_target,
+        )
+
+        try:
+            await resolve_public_webhook_target(payload.webhook_url)
+        except UnsafeWebhookURLError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     from app.services.settings_service import set_setting
 
     pairs = {

@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.webhook_security import validate_webhook_url
+
 
 class StrictSettingsModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -22,6 +24,11 @@ class NotificationConfigRequest(StrictSettingsModel):
     notify_levels: list[Literal["info", "warning", "error"]] = Field(
         default_factory=lambda: ["warning", "error"]
     )
+
+    @field_validator("webhook_url")
+    @classmethod
+    def valid_webhook_url(cls, value: str):
+        return validate_webhook_url(value)
 
 
 class NotificationConfigResponse(StrictSettingsModel):
