@@ -1,56 +1,44 @@
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
 
 from app.api.deps import CurrentUser, DBSession
 from app.schemas.common import ResponseBase
+from app.schemas.settings import (
+    NotificationConfigRequest,
+    NotificationConfigResponse,
+    PasswordChangeRequest,
+    ProfileResponse,
+    SystemParams,
+    SystemParamsRequest,
+)
+from app.services.analysis_pipeline import analysis_pipeline
 from app.services.audit_service import extract_request_info, log_action
 
 router = APIRouter()
 
 
-class NotificationConfigRequest(BaseModel):
-    email_enabled: bool = False
-    email_smtp_host: str = ""
-    email_smtp_port: int = 465
-    email_sender: str = ""
-    email_password: str = ""
-    email_use_ssl: bool = True
-    email_recipient: str = ""
-    webhook_enabled: bool = False
-    webhook_url: str = ""
-    webhook_secret: str = ""
-    notify_levels: list[str] = ["warning", "error"]
-
-
-class PasswordChangeRequest(BaseModel):
-    old_password: str
-    new_password: str
-    confirm_password: str
-
-
-class SystemParamsRequest(BaseModel):
-    params: dict
-
-
-@router.get("/notifications", response_model=ResponseBase[dict])
+@router.get("/notifications", response_model=ResponseBase[NotificationConfigResponse])
 async def get_notifications(user: CurrentUser, db: DBSession):
     from app.services.settings_service import get_settings_category
 
     config = await get_settings_category(db, user.id, "notification")
+    stored_levels = config.get("notify_levels", "warning,error").split(",")
+    valid_levels = [
+        level for level in stored_levels if level in {"info", "warning", "error"}
+    ] or ["warning", "error"]
     return ResponseBase(
-        data={
-            "email_enabled": config.get("email_enabled", "false").lower() == "true",
-            "email_smtp_host": config.get("email_smtp_host", ""),
-            "email_smtp_port": int(config.get("email_smtp_port", "465")),
-            "email_sender": config.get("email_sender", ""),
-            "has_email_password": bool(config.get("email_password")),
-            "email_use_ssl": config.get("email_use_ssl", "true").lower() == "true",
-            "email_recipient": config.get("email_recipient", ""),
-            "webhook_enabled": config.get("webhook_enabled", "false").lower() == "true",
-            "webhook_url": config.get("webhook_url", ""),
-            "has_webhook_secret": bool(config.get("webhook_secret")),
-            "notify_levels": config.get("notify_levels", "warning,error").split(","),
-        }
+        data=NotificationConfigResponse(
+            email_enabled=config.get("email_enabled", "false").lower() == "true",
+            email_smtp_host=config.get("email_smtp_host", ""),
+            email_smtp_port=int(config.get("email_smtp_port", "465")),
+            email_sender=config.get("email_sender", ""),
+            has_email_password=bool(config.get("email_password")),
+            email_use_ssl=config.get("email_use_ssl", "true").lower() == "true",
+            email_recipient=config.get("email_recipient", ""),
+            webhook_enabled=config.get("webhook_enabled", "false").lower() == "true",
+            webhook_url=config.get("webhook_url", ""),
+            has_webhook_secret=bool(config.get("webhook_secret")),
+            notify_levels=valid_levels,
+        )
     )
 
 
@@ -102,19 +90,21 @@ async def test_webhook(user: CurrentUser, db: DBSession):
     return ResponseBase(data={"sent": success})
 
 
-@router.get("/params", response_model=ResponseBase[dict])
+@router.get("/params", response_model=ResponseBase[SystemParams])
 async def get_params(user: CurrentUser, db: DBSession):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可操作系统参数")
     from app.services.settings_service import get_system_params
 
-    params = await get_system_params(db)
-    return ResponseBase(data=params)
+    return ResponseBase(data=await get_system_params(db))
 
 
-@router.put("/params", response_model=ResponseBase[dict])
+@router.put("/params", response_model=ResponseBase[SystemParams])
 async def save_params(
-    user: CurrentUser, db: DBSession, payload: SystemParamsRequest, request: Request
+    user: CurrentUser,
+    db: DBSession,
+    payload: SystemParamsRequest,
+    request: Request,
 ):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可操作系统参数")
@@ -126,39 +116,50 @@ async def save_params(
         db,
         user_id=user.id,
         action="settings.params_update",
-        detail=params,
+        detail=params.model_dump(),
         ip_address=ip,
         user_agent=ua,
     )
+    await db.commit()
+    analysis_pipeline.reschedule(params.analysis_time)
     return ResponseBase(data=params)
 
 
-@router.post("/params/reset", response_model=ResponseBase[dict])
-async def reset_params(user: CurrentUser, db: DBSession):
+@router.post("/params/reset", response_model=ResponseBase[SystemParams])
+async def reset_params(user: CurrentUser, db: DBSession, request: Request):
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="仅管理员可操作系统参数")
     from app.services.settings_service import reset_system_params
 
     params = await reset_system_params(db)
+    ip, ua = extract_request_info(request)
+    await log_action(
+        db,
+        user_id=user.id,
+        action="settings.params_reset",
+        detail=params.model_dump(),
+        ip_address=ip,
+        user_agent=ua,
+    )
+    await db.commit()
+    analysis_pipeline.reschedule(params.analysis_time)
     return ResponseBase(data=params)
 
 
-@router.get("/profile", response_model=ResponseBase[dict])
+@router.get("/profile", response_model=ResponseBase[ProfileResponse])
 async def get_profile(user: CurrentUser, db: DBSession):
     return ResponseBase(
-        data={
-            "username": user.username,
-            "role": user.role,
-            "is_active": user.is_active,
-            "created_at": str(user.created_at) if hasattr(user, "created_at") else "",
-        }
+        data=ProfileResponse(
+            username=user.username,
+            role=user.role,
+            is_active=user.is_active,
+            created_at=user.created_at,
+        )
     )
 
 
 @router.put("/password", response_model=ResponseBase[None])
 async def change_password(user: CurrentUser, db: DBSession, payload: PasswordChangeRequest):
-    if len(payload.new_password) < 8:
-        raise HTTPException(status_code=400, detail="密码至少8位")
     if not any(c.isalpha() for c in payload.new_password) or not any(
         c.isdigit() for c in payload.new_password
     ):

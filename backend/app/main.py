@@ -63,9 +63,14 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("event_bus.subscribe_failed", topic=topic, error=str(e))
 
+    from app.services.settings_service import get_system_params
+
+    async with AsyncSessionLocal() as settings_db:
+        runtime_params = await get_system_params(settings_db)
+
     from app.services.analysis_pipeline import analysis_pipeline
 
-    analysis_pipeline.start()
+    analysis_pipeline.start(runtime_params.analysis_time)
     yield
     analysis_pipeline.stop()
     await event_bus.disconnect()

@@ -38,25 +38,36 @@ class AnalysisPipeline:
     def __init__(self):
         self._scheduler = AsyncIOScheduler()
         self._started = False
+        self._analysis_time = "17:00"
         self._current_run_id: str | None = None
 
-    def start(self):
+    @staticmethod
+    def _cron_trigger(analysis_time: str) -> CronTrigger:
+        hour, minute = (int(part) for part in analysis_time.split(":"))
+        return CronTrigger(hour=hour, minute=minute, timezone="Asia/Shanghai")
+
+    def reschedule(self, analysis_time: str) -> None:
+        self._analysis_time = analysis_time
+        if not self._started:
+            return
+        self._scheduler.add_job(
+            self._scheduled_run,
+            trigger=self._cron_trigger(analysis_time),
+            id="analysis_pipeline_daily",
+            replace_existing=True,
+        )
+
+    def start(self, analysis_time: str = "17:00"):
         if not self._started:
             self._scheduler.start()
             self._started = True
-
-            self._scheduler.add_job(
-                self._scheduled_run,
-                trigger=CronTrigger(hour=17, minute=30, timezone="Asia/Shanghai"),
-                id="analysis_pipeline_daily",
-                replace_existing=True,
-            )
+            self.reschedule(analysis_time)
 
             from app.services.data_sync_service import data_sync_service
 
             data_sync_service.register_schedules(self._scheduler)
 
-            logger.info("analysis_pipeline.started")
+            logger.info("analysis_pipeline.started", analysis_time=analysis_time)
 
     def stop(self):
         if self._started:
