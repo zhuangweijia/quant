@@ -1,32 +1,28 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { toast } from 'vue-sonner'
-import { settingsApi } from '@/api/settings'
+import { computed } from 'vue'
+
 import { BasicPage } from '@/components/global-layout'
-import Button from '@/components/ui/button/Button.vue'
-import Label from '@/components/ui/label/Label.vue'
-import Input from '@/components/ui/input/Input.vue'
-import {
-  Card as UiCard,
-  CardHeader as UiCardHeader,
-  CardContent as UiCardContent,
-  CardTitle as UiCardTitle,
-  CardDescription as UiCardDescription,
-} from '@/components/ui/card'
+import { useAuthStore } from '@/stores/auth'
+import AccountSecurityCard from './AccountSecurityCard.vue'
+import AppearanceSettingsCard from './AppearanceSettingsCard.vue'
+import NotificationSettingsCard from './NotificationSettingsCard.vue'
+import SystemParamsCard from './SystemParamsCard.vue'
+
+const authStore = useAuthStore()
+const isAdmin = computed(() => authStore.role === 'admin')
 </script>
 
 <template>
-  <BasicPage title="系统设置" description="通知配置、系统参数、个人资料">
-    <div class="space-y-6">
-      <UiCard>
-        <UiCardHeader>
-          <UiCardTitle>系统参数</UiCardTitle>
-          <UiCardDescription>分析引擎配置参数</UiCardDescription>
-        </UiCardHeader>
-        <UiCardContent>
-          <p class="text-sm text-muted-foreground">配置面板即将更新</p>
-        </UiCardContent>
-      </UiCard>
+  <BasicPage title="系统设置" description="管理外观、通知、分析参数与账户安全。">
+    <div class="grid gap-6 xl:grid-cols-2">
+      <AppearanceSettingsCard />
+      <NotificationSettingsCard />
+      <div v-if="isAdmin" class="xl:col-span-2">
+        <SystemParamsCard />
+      </div>
+      <div class="xl:col-span-2">
+        <AccountSecurityCard />
+      </div>
     </div>
   </BasicPage>
 </template>
