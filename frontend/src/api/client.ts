@@ -1,6 +1,27 @@
 import axios, { type AxiosInstance, type AxiosError, type InternalAxiosRequestConfig } from "axios";
 import { storage } from "@/utils/storage";
 
+export interface ValidationIssue {
+  loc: Array<string | number>;
+  msg: string;
+  type: string;
+}
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly detail?: unknown) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function apiErrorFromAxios(error: AxiosError): ApiError {
+  const body = error.response?.data as
+    | { message?: string; detail?: unknown }
+    | undefined;
+  const message = body?.message || error.message || "网络错误";
+  return new ApiError(message, body?.detail);
+}
+
 const client: AxiosInstance = axios.create({
   timeout: 30000,
   headers: { "Content-Type": "application/json" },
@@ -42,8 +63,11 @@ client.interceptors.response.use(
     if (error.response?.status === 401) {
       const url = originalRequest?.url || "";
       if (url.includes("/auth/login") || url.includes("/auth/refresh")) {
-        const msg = (error.response?.data as any)?.message || "用户名或密码错误";
-        return Promise.reject(new Error(msg));
+        const apiError = apiErrorFromAxios(error);
+        const body = error.response?.data as { message?: string } | undefined;
+        return Promise.reject(
+          new ApiError(body?.message || "用户名或密码错误", apiError.detail),
+        );
       }
 
       const refreshToken = storage.getRefreshToken();
@@ -72,7 +96,7 @@ client.interceptors.response.use(
             refreshSubscribers = [];
             storage.clearAuth();
             window.location.href = "/login";
-            return Promise.reject(error);
+            return Promise.reject(apiErrorFromAxios(error));
           }
         }
 
@@ -90,9 +114,7 @@ client.interceptors.response.use(
         window.location.href = "/login";
       }
     }
-    const msg =
-      (error.response?.data as any)?.message || error.message || "网络错误";
-    return Promise.reject(new Error(msg));
+    return Promise.reject(apiErrorFromAxios(error));
   }
 );
 
