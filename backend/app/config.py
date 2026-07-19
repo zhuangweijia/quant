@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     FORWARD_RETURN_THRESHOLD: float = 0.02
     MODEL_IC_THRESHOLD: float = 0.02
     MODEL_DIR: str = "models"
+    TRANSACTION_COST_BUFFER_RATE: float = 0.001
+    ADVICE_PRICE_TOLERANCE: float = 0.03
 
     RATE_LIMIT_PER_MINUTE: int = 60
 
