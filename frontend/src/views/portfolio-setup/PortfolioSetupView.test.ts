@@ -15,6 +15,27 @@ function mountView() {
   return mount(PortfolioSetupView, { attachTo: document.body })
 }
 
+function validStoredDraft(): Record<string, any> {
+  return {
+    version: 1,
+    currentStep: 2,
+    profile: {
+      investmentHorizonDays: '240',
+      riskLevel: 'conservative',
+      maxDrawdown: '10',
+      maxStockWeight: '5',
+      maxIndustryWeight: '20',
+      minCashRatio: '20',
+      maxDailyTurnover: '20',
+    },
+    totalCapital: '200000.00',
+    cash: '150000.00',
+    positions: [
+      { symbol: '000001', quantity: 100, average_cost: '12.00' },
+    ],
+  }
+}
+
 async function goToConstraints(wrapper: VueWrapper) {
   await wrapper.get('[data-testid="setup-next"]').trigger('click')
 }
@@ -112,6 +133,87 @@ describe('PortfolioSetupView', () => {
     expect(wrapper.get('[data-testid="setup-next"]').attributes('disabled')).toBeDefined()
     await wrapper.get('[data-testid="setup-next"]').trigger('click')
     expect(wrapper.text()).toContain('资金与持仓')
+  })
+
+  it('rejects surrounding whitespace without rewriting setup inputs', async () => {
+    const store = usePortfolioStore()
+    const completeSetup = vi.spyOn(store, 'completeSetup').mockResolvedValue({} as never)
+    const wrapper = mountView()
+    await goToHoldings(wrapper)
+    await wrapper.get('#total-capital').setValue(' 100000.00 ')
+    await wrapper.get('#portfolio-cash').setValue(' 90000.00 ')
+    await wrapper.get('[data-testid="holding-add"]').trigger('click')
+    await wrapper.get('#holding-symbol-0').setValue(' 000001 ')
+    await wrapper.get('#holding-quantity-0').setValue('100')
+    await wrapper.get('#holding-cost-0').setValue(' 10.00 ')
+    await wrapper.get('#holding-symbol-0').trigger('blur')
+
+    expect((wrapper.get('#total-capital').element as HTMLInputElement).value).toBe(
+      ' 100000.00 ',
+    )
+    expect((wrapper.get('#portfolio-cash').element as HTMLInputElement).value).toBe(
+      ' 90000.00 ',
+    )
+    expect((wrapper.get('#holding-symbol-0').element as HTMLInputElement).value).toBe(
+      ' 000001 ',
+    )
+    expect((wrapper.get('#holding-cost-0').element as HTMLInputElement).value).toBe(
+      ' 10.00 ',
+    )
+    expect(wrapper.text()).toContain('总资金必须是大于 0 的十进制数')
+    expect(wrapper.text()).toContain('可用现金必须是非负十进制数')
+    expect(wrapper.text()).toContain('股票代码必须是六位数字')
+    expect(wrapper.text()).toContain('平均成本必须是大于 0 的十进制数')
+    expect(wrapper.get('[data-testid="setup-next"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="setup-next"]').trigger('click')
+    expect(wrapper.text()).toContain('资金与持仓')
+    expect(completeSetup).not.toHaveBeenCalled()
+    expect(localStorage.getItem(DRAFT_KEY)).toContain(' 100000.00 ')
+  })
+
+  it('restores whitespace exactly and blocks confirmation submit', async () => {
+    const store = usePortfolioStore()
+    const completeSetup = vi.spyOn(store, 'completeSetup').mockResolvedValue({} as never)
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({
+        version: 1,
+        currentStep: 3,
+        profile: {
+          investmentHorizonDays: '120',
+          riskLevel: 'balanced',
+          maxDrawdown: '15',
+          maxStockWeight: '8',
+          maxIndustryWeight: '25',
+          minCashRatio: '10',
+          maxDailyTurnover: '30',
+        },
+        totalCapital: ' 100000.00 ',
+        cash: ' 90000.00 ',
+        positions: [
+          { symbol: ' 000001 ', quantity: 100, average_cost: ' 10.00 ' },
+        ],
+      }),
+    )
+    const wrapper = mountView()
+
+    expect(wrapper.text()).toContain('确认')
+    expect(wrapper.get('[data-testid="setup-submit"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-testid="setup-submit"]').trigger('click')
+    expect(completeSetup).not.toHaveBeenCalled()
+    await wrapper.get('[data-testid="setup-back"]').trigger('click')
+    expect((wrapper.get('#total-capital').element as HTMLInputElement).value).toBe(
+      ' 100000.00 ',
+    )
+    expect((wrapper.get('#portfolio-cash').element as HTMLInputElement).value).toBe(
+      ' 90000.00 ',
+    )
+    expect((wrapper.get('#holding-symbol-0').element as HTMLInputElement).value).toBe(
+      ' 000001 ',
+    )
+    expect((wrapper.get('#holding-cost-0').element as HTMLInputElement).value).toBe(
+      ' 10.00 ',
+    )
   })
 
   it('test_server_valuation_error_keeps_form', async () => {
@@ -226,4 +328,33 @@ describe('PortfolioSetupView', () => {
     expect(stored).not.toContain('token')
     expect(stored).not.toContain('password')
   })
+
+  it.each([
+    ['top-level token', (draft: Record<string, any>) => { draft.token = 'secret-top-token' }],
+    ['top-level password', (draft: Record<string, any>) => { draft.password = 'secret-top-password' }],
+    ['profile token', (draft: Record<string, any>) => { draft.profile.token = 'secret-profile-token' }],
+    ['profile password', (draft: Record<string, any>) => { draft.profile.password = 'secret-profile-password' }],
+    ['position token', (draft: Record<string, any>) => { draft.positions[0].token = 'secret-position-token' }],
+    ['position password', (draft: Record<string, any>) => { draft.positions[0].password = 'secret-position-password' }],
+  ] as const)(
+    'rejects and removes a draft with an unknown %s key',
+    async (_, addUnknownKey) => {
+      const draft = validStoredDraft()
+      addUnknownKey(draft)
+      localStorage.setItem(DRAFT_KEY, JSON.stringify(draft))
+
+      const wrapper = mountView()
+
+      expect(wrapper.text()).toContain('风险与期限')
+      expect((wrapper.get('#risk-level').element as HTMLSelectElement).value).toBe('balanced')
+      expect((wrapper.get('#horizon-days').element as HTMLInputElement).value).toBe('120')
+      expect(localStorage.getItem(DRAFT_KEY)).toBeNull()
+
+      await wrapper.get('#horizon-days').setValue('121')
+      const nextDraft = localStorage.getItem(DRAFT_KEY) ?? ''
+      expect(nextDraft).not.toContain('secret')
+      expect(nextDraft).not.toContain('token')
+      expect(nextDraft).not.toContain('password')
+    },
+  )
 })

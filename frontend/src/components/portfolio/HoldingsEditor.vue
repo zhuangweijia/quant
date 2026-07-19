@@ -21,7 +21,7 @@ const emit = defineEmits<{
 const symbolCounts = computed(() => {
   const counts = new Map<string, number>()
   for (const position of props.positions) {
-    const symbol = position.symbol.trim()
+    const symbol = position.symbol
     if (/^\d{6}$/.test(symbol)) {
       counts.set(symbol, (counts.get(symbol) ?? 0) + 1)
     }
@@ -30,7 +30,7 @@ const symbolCounts = computed(() => {
 })
 
 function symbolError(position: PositionInput): string {
-  const symbol = position.symbol.trim()
+  const symbol = position.symbol
   if (!/^\d{6}$/.test(symbol)) return '股票代码必须是六位数字'
   if ((symbolCounts.value.get(symbol) ?? 0) > 1) return '持仓股票代码不能重复'
   return ''
@@ -42,6 +42,10 @@ function quantityError(quantity: number): string {
 
 function costError(cost: Money): string {
   return isPositiveDecimal(cost) ? '' : '平均成本必须是大于 0 的十进制数'
+}
+
+function cashError(value: Money): string {
+  return /^\d+(?:\.\d+)?$/.test(value) ? '' : '可用现金必须是非负十进制数'
 }
 
 function isPositiveDecimal(value: string): boolean {
@@ -64,13 +68,6 @@ function updatePosition<K extends keyof PositionInput>(
 
 function updateSymbol(index: number, value: string | number) {
   updatePosition(index, 'symbol', String(value))
-}
-
-function normalizeSymbol(index: number) {
-  const symbol = props.positions[index]?.symbol.trim()
-  if (symbol !== undefined && symbol !== props.positions[index].symbol) {
-    updatePosition(index, 'symbol', symbol)
-  }
 }
 
 function updateQuantity(index: number, value: string | number) {
@@ -123,8 +120,12 @@ function multiplyDecimalByInteger(value: Money, quantity: number): string {
         :model-value="cash"
         inputmode="decimal"
         placeholder="例如 100000.00"
+        :aria-invalid="!!cashError(cash)"
         @update:model-value="emit('update:cash', String($event))"
       />
+      <p v-if="cashError(cash)" class="text-xs text-destructive">
+        {{ cashError(cash) }}
+      </p>
       <p class="text-xs text-muted-foreground">
         金额按输入的十进制字符串保存，不进行浮点换算。
         <span v-if="totalCapital">总资金：{{ totalCapital }}</span>
@@ -162,7 +163,6 @@ function multiplyDecimalByInteger(value: Money, quantity: number): string {
             placeholder="六位数字"
             :aria-invalid="!!symbolError(position)"
             @update:model-value="updateSymbol(index, $event)"
-            @blur="normalizeSymbol(index)"
           />
           <p
             v-if="symbolError(position)"

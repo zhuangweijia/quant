@@ -62,6 +62,33 @@ describe('HoldingsEditor', () => {
     expect(wrapper.text()).toContain('股票代码必须是六位数字')
   })
 
+  it('keeps surrounding whitespace visible and invalid without blur normalization', async () => {
+    const positions: PositionInput[] = [
+      { symbol: ' 000001 ', quantity: 100, average_cost: ' 10.00 ' },
+    ]
+    const wrapper = mountEditor(positions, ' 100000.00 ', ' 100000.00 ')
+
+    expect((wrapper.get('#portfolio-cash').element as HTMLInputElement).value).toBe(
+      ' 100000.00 ',
+    )
+    expect((wrapper.get('#holding-symbol-0').element as HTMLInputElement).value).toBe(
+      ' 000001 ',
+    )
+    expect((wrapper.get('#holding-cost-0').element as HTMLInputElement).value).toBe(
+      ' 10.00 ',
+    )
+    expect(wrapper.text()).toContain('可用现金必须是非负十进制数')
+    expect(wrapper.text()).toContain('股票代码必须是六位数字')
+    expect(wrapper.text()).toContain('平均成本必须是大于 0 的十进制数')
+
+    await wrapper.get('#holding-symbol-0').trigger('blur')
+
+    expect(wrapper.emitted('update:positions')).toBeUndefined()
+    expect((wrapper.get('#holding-symbol-0').element as HTMLInputElement).value).toBe(
+      ' 000001 ',
+    )
+  })
+
   it('shows duplicate-symbol errors inline', () => {
     const wrapper = mountEditor([
       { symbol: '000001', quantity: 100, average_cost: '10' },

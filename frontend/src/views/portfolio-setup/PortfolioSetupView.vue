@@ -104,16 +104,50 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(value)
+  return (
+    actual.length === expected.length &&
+    expected.every(key => Object.prototype.hasOwnProperty.call(value, key))
+  )
+}
+
 function isRiskLevel(value: unknown): value is RiskLevel {
   return value === 'conservative' || value === 'balanced' || value === 'aggressive'
 }
 
 function parseDraft(value: unknown): SetupDraft | null {
-  if (!isPlainObject(value) || value.version !== DRAFT_VERSION) return null
+  if (
+    !isPlainObject(value) ||
+    !hasExactKeys(value, [
+      'version',
+      'currentStep',
+      'profile',
+      'totalCapital',
+      'cash',
+      'positions',
+    ]) ||
+    value.version !== DRAFT_VERSION
+  ) {
+    return null
+  }
   if (!Number.isInteger(value.currentStep) || Number(value.currentStep) < 0 || Number(value.currentStep) > 3) {
     return null
   }
-  if (!isPlainObject(value.profile)) return null
+  if (
+    !isPlainObject(value.profile) ||
+    !hasExactKeys(value.profile, [
+      'investmentHorizonDays',
+      'riskLevel',
+      'maxDrawdown',
+      'maxStockWeight',
+      'maxIndustryWeight',
+      'minCashRatio',
+      'maxDailyTurnover',
+    ])
+  ) {
+    return null
+  }
 
   const profile = value.profile
   const investmentHorizonDays = profile.investmentHorizonDays
@@ -140,6 +174,7 @@ function parseDraft(value: unknown): SetupDraft | null {
   for (const position of value.positions) {
     if (
       !isPlainObject(position) ||
+      !hasExactKeys(position, ['symbol', 'quantity', 'average_cost']) ||
       typeof position.symbol !== 'string' ||
       !Number.isInteger(position.quantity) ||
       Number(position.quantity) < 0 ||
@@ -247,12 +282,11 @@ function percentageInRange(value: string, minimum: number, maximum: number): boo
 }
 
 function nonNegativeMoney(value: Money): boolean {
-  return /^\d+(?:\.\d+)?$/.test(value.trim())
+  return /^\d+(?:\.\d+)?$/.test(value)
 }
 
 function positiveMoney(value: Money): boolean {
-  const trimmed = value.trim()
-  return nonNegativeMoney(trimmed) && /[1-9]/.test(trimmed)
+  return nonNegativeMoney(value) && /[1-9]/.test(value)
 }
 
 const profileErrors = computed(() => ({
@@ -281,13 +315,13 @@ const profileErrors = computed(() => ({
 const positionErrors = computed(() => {
   const symbolCounts = new Map<string, number>()
   for (const position of positions.value) {
-    const symbol = position.symbol.trim()
+    const symbol = position.symbol
     if (/^\d{6}$/.test(symbol)) {
       symbolCounts.set(symbol, (symbolCounts.get(symbol) ?? 0) + 1)
     }
   }
   return positions.value.map(position => {
-    const symbol = position.symbol.trim()
+    const symbol = position.symbol
     return {
       symbol:
         !/^\d{6}$/.test(symbol) || (symbolCounts.get(symbol) ?? 0) > 1,
@@ -356,12 +390,12 @@ function setupPayload(): PortfolioSetupRequest {
   }
   return {
     profile: profilePayload,
-    total_capital: totalCapital.value.trim(),
-    cash: cash.value.trim(),
+    total_capital: totalCapital.value,
+    cash: cash.value,
     positions: positions.value.map(position => ({
-      symbol: position.symbol.trim(),
+      symbol: position.symbol,
       quantity: position.quantity,
-      average_cost: position.average_cost.trim(),
+      average_cost: position.average_cost,
     })),
   }
 }
