@@ -1,6 +1,6 @@
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, call
 
 import pytest
 from fastapi import HTTPException
@@ -175,16 +175,62 @@ def test_analysis_pipeline_registers_daily_cleanup(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_portfolio_advice_stage_runs_after_ranking_for_shanghai_signal_date(monkeypatch):
+async def test_pipeline_reuses_one_shanghai_date_for_ranking_and_advice(monkeypatch):
     assert STAGES[-2:] == ["ranking", "portfolio_advice"]
-    generate = AsyncMock(return_value={"succeeded": [], "failed": []})
-    monkeypatch.setattr("app.services.advice_service.generate_for_all_users", generate)
-    monkeypatch.setattr(
-        analysis_pipeline_module,
-        "_shanghai_signal_date",
-        lambda: date(2026, 7, 19),
+    fixed_date = date(2026, 7, 19)
+    shanghai_date = Mock(return_value=fixed_date)
+    monkeypatch.setattr(analysis_pipeline_module, "_shanghai_signal_date", shanghai_date)
+    monkeypatch.setattr(analysis_pipeline_module, "STAGES", ["ranking", "portfolio_advice"])
+    db = SimpleNamespace(
+        add=lambda _entity: None,
+        commit=AsyncMock(),
+        scalar=AsyncMock(return_value=0),
     )
 
-    await AnalysisPipeline()._execute_stage("portfolio_advice")
+    class SessionContext:
+        async def __aenter__(self):
+            return db
 
-    generate.assert_awaited_once_with(date(2026, 7, 19))
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(analysis_pipeline_module, "AsyncSessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(analysis_pipeline_module.event_bus, "publish", AsyncMock())
+    pipeline = AnalysisPipeline()
+    pipeline._execute_stage = AsyncMock()
+    pipeline._update_run = AsyncMock()
+    pipeline._publish_progress = AsyncMock()
+
+    await pipeline._run_pipeline("run-1", "manual")
+
+    shanghai_date.assert_called_once_with()
+    assert pipeline._execute_stage.await_args_list == [
+        call("ranking", fixed_date),
+        call("portfolio_advice", fixed_date),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ranking_and_advice_stages_receive_the_passed_signal_date(monkeypatch):
+    fixed_date = date(2026, 7, 19)
+    ranking = AsyncMock()
+    advice = AsyncMock(return_value={"succeeded": [], "failed": []})
+    monkeypatch.setattr("app.services.ranking_service.generate_daily_ranking", ranking)
+    monkeypatch.setattr("app.services.advice_service.generate_for_all_users", advice)
+    db = SimpleNamespace(commit=AsyncMock())
+
+    class SessionContext:
+        async def __aenter__(self):
+            return db
+
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(analysis_pipeline_module, "AsyncSessionLocal", lambda: SessionContext())
+    pipeline = AnalysisPipeline()
+
+    await pipeline._execute_stage("ranking", fixed_date)
+    await pipeline._execute_stage("portfolio_advice", fixed_date)
+
+    ranking.assert_awaited_once_with(db, fixed_date)
+    advice.assert_awaited_once_with(fixed_date)

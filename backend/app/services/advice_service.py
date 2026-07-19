@@ -42,6 +42,7 @@ ESTIMATED_COST_RATE = Decimal("0.001")
 MAX_RETURN_SESSIONS = 120
 UNRESOLVED_STATUSES = {"generating", "ready", "partially_handled"}
 SUCCESS_STATUSES = {"ready", "partially_handled", "handled", "expired"}
+MISSING_HELD_QUOTE_WARNING = "缺少信号日收盘价，失败快照按录入平均成本估值"
 
 ERROR_MESSAGES = {
     "candidate_market_data_missing": "候选股票行情数据不完整",
@@ -104,6 +105,33 @@ def _common_returns(
             series.append(float(current / previous - Decimal("1")))
         returns[symbol] = tuple(series)
     return returns
+
+
+def _snapshot_position(
+    position: Any, stock: Any | None, bar: Any | None, signal_date: date
+) -> dict[str, Any]:
+    average_cost = (
+        Decimal(position.total_cost) / Decimal(position.quantity)
+        if position.quantity
+        else Decimal("0")
+    )
+    latest_close = Decimal(bar.close) if bar is not None else None
+    valuation_price = latest_close if latest_close is not None else average_cost
+    if latest_close is None:
+        warning = MISSING_HELD_QUOTE_WARNING
+    elif stock is None:
+        warning = "股票资料缺失"
+    else:
+        warning = None
+    return {
+        "symbol": position.symbol,
+        "quantity": position.quantity,
+        "average_cost": str(average_cost),
+        "latest_close": str(latest_close) if latest_close is not None else None,
+        "price_date": signal_date.isoformat() if latest_close is not None else None,
+        "market_value": str(Decimal(position.quantity) * valuation_price),
+        "valuation_warning": warning,
+    }
 
 
 class AdviceRepository:
@@ -210,34 +238,7 @@ class AdviceRepository:
         )
         same_date_bars = {bar.symbol: bar for bar in bars_result.scalars().all()}
 
-        ranked_history = (
-            select(
-                DailyBar.symbol.label("symbol"),
-                DailyBar.trade_date.label("trade_date"),
-                DailyBar.close.label("close"),
-                func.row_number()
-                .over(
-                    partition_by=DailyBar.symbol,
-                    order_by=DailyBar.trade_date.desc(),
-                )
-                .label("row_number"),
-            )
-            .where(
-                DailyBar.symbol.in_(candidate_symbols),
-                DailyBar.trade_date <= signal_date,
-            )
-            .subquery()
-        )
-        history_result = await self.db.execute(
-            select(
-                ranked_history.c.symbol,
-                ranked_history.c.trade_date,
-                ranked_history.c.close,
-            )
-            .where(ranked_history.c.row_number <= MAX_RETURN_SESSIONS + 1)
-            .order_by(ranked_history.c.trade_date, ranked_history.c.symbol)
-        )
-        returns_by_symbol = _common_returns(history_result.all(), candidate_symbols)
+        returns_by_symbol = await self.load_common_returns(candidate_symbols, signal_date)
 
         missing_held = held_symbols - (set(stocks) & set(same_date_bars))
         missing_candidates = set(candidate_symbols) - (set(stocks) & set(same_date_bars))
@@ -253,24 +254,8 @@ class AdviceRepository:
             stock = stocks.get(position.symbol)
             bar = same_date_bars.get(position.symbol)
             price = Decimal(bar.close) if bar is not None else None
-            market_value = Decimal(position.quantity) * price if price is not None else Decimal("0")
-            average_cost = (
-                Decimal(position.total_cost) / Decimal(position.quantity)
-                if position.quantity
-                else Decimal("0")
-            )
-            warning = None if price is not None and stock is not None else "当日行情或股票资料缺失"
-            snapshot_positions.append(
-                {
-                    "symbol": position.symbol,
-                    "quantity": position.quantity,
-                    "average_cost": str(average_cost),
-                    "latest_close": str(price) if price is not None else None,
-                    "price_date": signal_date.isoformat() if price is not None else None,
-                    "market_value": str(market_value),
-                    "valuation_warning": warning,
-                }
-            )
+            snapshot_position = _snapshot_position(position, stock, bar, signal_date)
+            snapshot_positions.append(snapshot_position)
             if stock is not None and price is not None:
                 engine_positions.append(
                     EnginePosition(
@@ -279,7 +264,7 @@ class AdviceRepository:
                         stock.industry,
                         position.quantity,
                         price,
-                        market_value,
+                        Decimal(snapshot_position["market_value"]),
                     )
                 )
 
@@ -330,6 +315,34 @@ class AdviceRepository:
             data_date=signal_date,
             input_error_code=input_error_code,
         )
+
+    async def load_common_returns(
+        self, candidate_symbols: tuple[str, ...], signal_date: date
+    ) -> dict[str, tuple[float, ...]]:
+        symbols = tuple(sorted(set(candidate_symbols)))
+        if not symbols:
+            return {}
+        common_dates_result = await self.db.execute(
+            select(DailyBar.trade_date)
+            .where(
+                DailyBar.symbol.in_(symbols),
+                DailyBar.trade_date <= signal_date,
+            )
+            .group_by(DailyBar.trade_date)
+            .having(func.count(func.distinct(DailyBar.symbol)) == len(symbols))
+            .order_by(DailyBar.trade_date.desc())
+            .limit(MAX_RETURN_SESSIONS + 1)
+        )
+        common_dates = tuple(common_dates_result.scalars().all())
+        history_result = await self.db.execute(
+            select(DailyBar.symbol, DailyBar.trade_date, DailyBar.close)
+            .where(
+                DailyBar.symbol.in_(symbols),
+                DailyBar.trade_date.in_(common_dates),
+            )
+            .order_by(DailyBar.trade_date, DailyBar.symbol)
+        )
+        return _common_returns(history_result.all(), symbols)
 
     async def holdings_are_stale(self, user_id: Any, signal_date: date) -> bool:
         pending = await self.db.scalar(
@@ -475,6 +488,19 @@ class AdviceRepository:
 
     async def latest_market_date(self) -> date | None:
         return await self.db.scalar(select(func.max(DailyBar.trade_date)))
+
+    async def find_expirable(self, user_id: Any, latest_market_date: date) -> list[DailyAdvice]:
+        result = await self.db.execute(
+            select(DailyAdvice)
+            .where(
+                DailyAdvice.user_id == user_id,
+                DailyAdvice.signal_date < latest_market_date,
+                DailyAdvice.status.in_(tuple(sorted(UNRESOLVED_STATUSES))),
+                DailyAdvice.superseded_by_id.is_(None),
+            )
+            .order_by(DailyAdvice.signal_date, DailyAdvice.version)
+        )
+        return list(result.scalars().all())
 
     async def expire(self, advice: DailyAdvice) -> None:
         advice.status = "expired"
@@ -701,9 +727,11 @@ async def expire_if_needed(db: AsyncSession, advice: DailyAdvice) -> None:
 
 async def expire_stale_advice(db: AsyncSession, user_id: Any) -> None:
     repo = AdviceRepository(db)
-    current = await repo.find_current(user_id)
-    if current is not None:
-        await expire_if_needed(db, current)
+    latest = await repo.latest_market_date()
+    if latest is None:
+        return
+    for advice in await repo.find_expirable(user_id, latest):
+        await repo.expire(advice)
 
 
 async def get_advice_response(

@@ -138,12 +138,6 @@ def upgrade() -> None:
         sa.Column("current_exposure", sa.Numeric(precision=10, scale=8), nullable=False),
         sa.Column("target_exposure", sa.Numeric(precision=10, scale=8), nullable=False),
         sa.Column("estimated_cash", sa.Numeric(precision=20, scale=4), nullable=False),
-        sa.Column(
-            "constraint_violations",
-            sa.JSON(),
-            server_default=sa.text("'[]'"),
-            nullable=False,
-        ),
         sa.Column("generated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("superseded_by_id", sa.Uuid(), nullable=True),
         sa.Column("error_code", sa.String(length=64), nullable=True),

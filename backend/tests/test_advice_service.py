@@ -2,11 +2,17 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import insert, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.models.advice import AdviceItem, DailyAdvice
+from app.models.daily_bar import DailyBar
+from app.models.execution import ExecutionRecord
+from app.models.portfolio import Portfolio, PortfolioSnapshot
 from app.services import advice_service
 
 USER_ID = UUID("00000000-0000-0000-0000-000000000001")
@@ -213,7 +219,7 @@ async def test_batch_continues_after_one_user_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_missing_held_symbol_data_persists_failed_without_items(monkeypatch):
+async def test_missing_held_input_routes_to_failed_persistence(monkeypatch):
     failed = SimpleNamespace(id="failed-1", version=1, status="failed")
     repo = SimpleNamespace(
         find_current=AsyncMock(return_value=None),
@@ -223,14 +229,12 @@ async def test_missing_held_symbol_data_persists_failed_without_items(monkeypatc
         create_snapshot=AsyncMock(return_value=SimpleNamespace(id="snapshot-1")),
         persist_failure=AsyncMock(return_value=failed),
         flush=AsyncMock(),
-        count_items=AsyncMock(return_value=0),
     )
     monkeypatch.setattr(advice_service, "AdviceRepository", lambda db: repo)
 
     result = await advice_service.generate_for_user(SimpleNamespace(), USER_ID, SIGNAL_DATE)
 
     assert result.status == "failed"
-    assert await repo.count_items(result.id) == 0
     assert repo.persist_failure.await_args.kwargs["error_code"] == "held_market_data_missing"
 
 
@@ -333,6 +337,7 @@ async def test_repository_loads_user_scoped_inputs_in_batched_queries():
                 ScalarsResult(predictions),
                 ScalarsResult(stocks),
                 ScalarsResult(closes),
+                ScalarsResult(sorted({row[1] for row in history}, reverse=True)),
                 RowsResult(history),
             ]
         )
@@ -340,10 +345,13 @@ async def test_repository_loads_user_scoped_inputs_in_batched_queries():
 
     loaded = await advice_service.AdviceRepository(db).load_inputs(USER_ID, SIGNAL_DATE)
 
-    assert db.execute.await_count == 7
+    assert db.execute.await_count == 8
     assert "investment_profiles.user_id" in str(db.execute.await_args_list[0].args[0])
     assert "portfolios.user_id" in str(db.execute.await_args_list[1].args[0])
     assert "stocks.in_csi300 IS true" in str(db.execute.await_args_list[4].args[0])
+    common_query = str(db.execute.await_args_list[6].args[0])
+    assert "GROUP BY daily_bars.trade_date" in common_query
+    assert "count(distinct(daily_bars.symbol))" in common_query
     assert loaded.model_version == "model-v1"
     assert loaded.engine_positions[0].market_value == Decimal("1000")
     assert loaded.engine_candidates[0].positive_factors == ("盈利改善",)
@@ -476,3 +484,224 @@ async def test_batch_enumeration_preserves_uuid_values_for_typed_queries(monkeyp
     user_ids = await advice_service._list_active_user_ids()
 
     assert user_ids == [USER_ID]
+
+
+@pytest.mark.asyncio
+async def test_common_return_calendar_intersects_before_limiting_suspended_symbols():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(lambda sync: DailyBar.__table__.create(sync))
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    common_start = date(2025, 1, 1)
+    common_dates = [common_start + timedelta(days=offset) for offset in range(121)]
+    rows = []
+    row_id = 1
+    for offset, trade_date in enumerate(common_dates):
+        for symbol, multiplier in (("000001", 1), ("000002", 2)):
+            close = Decimal(multiplier * (100 + offset))
+            rows.append(
+                {
+                    "id": row_id,
+                    "symbol": symbol,
+                    "trade_date": trade_date,
+                    "open": close,
+                    "high": close,
+                    "low": close,
+                    "close": close,
+                    "volume": Decimal("1"),
+                }
+            )
+            row_id += 1
+    for offset in range(80):
+        for symbol, day_offset in (("000001", 121 + 2 * offset), ("000002", 122 + 2 * offset)):
+            trade_date = common_start + timedelta(days=day_offset)
+            rows.append(
+                {
+                    "id": row_id,
+                    "symbol": symbol,
+                    "trade_date": trade_date,
+                    "open": Decimal("300"),
+                    "high": Decimal("300"),
+                    "low": Decimal("300"),
+                    "close": Decimal("300"),
+                    "volume": Decimal("1"),
+                }
+            )
+            row_id += 1
+
+    async with session_factory() as db:
+        await db.execute(insert(DailyBar), rows)
+        returns = await advice_service.AdviceRepository(db).load_common_returns(
+            ("000001", "000002"), common_start + timedelta(days=300)
+        )
+
+    assert len(returns["000001"]) == 120
+    assert returns["000001"] == returns["000002"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_missing_held_symbol_data_persists_failed_without_items():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    tables = (
+        Portfolio.__table__,
+        PortfolioSnapshot.__table__,
+        DailyAdvice.__table__,
+        AdviceItem.__table__,
+        ExecutionRecord.__table__,
+    )
+    async with engine.begin() as connection:
+        for table in tables:
+            await connection.run_sync(lambda sync, selected=table: selected.create(sync))
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    portfolio_id = uuid4()
+    profile_id = uuid4()
+    position = SimpleNamespace(
+        symbol="000001", quantity=100, total_cost=Decimal("900")
+    )
+    stock = SimpleNamespace(symbol="000001", name="平安银行", industry="银行")
+    snapshot_position = advice_service._snapshot_position(
+        position, stock, None, SIGNAL_DATE
+    )
+
+    async with session_factory() as db:
+        portfolio = Portfolio(
+            id=portfolio_id,
+            user_id=USER_ID,
+            currency="CNY",
+            cash=Decimal("100"),
+            last_confirmed_at=datetime(2026, 7, 17, 8, tzinfo=UTC),
+        )
+        db.add(portfolio)
+        await db.flush()
+        inputs = advice_service.AdviceInputs(
+            user_id=USER_ID,
+            profile=SimpleNamespace(id=profile_id),
+            portfolio=portfolio,
+            positions=(position,),
+            engine_profile=SimpleNamespace(),
+            engine_positions=(),
+            engine_candidates=(),
+            snapshot_positions=(snapshot_position,),
+            model_version="model-v1",
+            data_date=SIGNAL_DATE,
+            input_error_code="held_market_data_missing",
+        )
+        repo = advice_service.AdviceRepository(db)
+        snapshot = await repo.create_snapshot(inputs)
+        failed = await repo.persist_failure(
+            inputs,
+            snapshot,
+            signal_date=SIGNAL_DATE,
+            version=1,
+            error_code="held_market_data_missing",
+        )
+        await repo.flush()
+        response = await repo.to_response(failed)
+
+        assert snapshot.positions[0]["latest_close"] is None
+        assert snapshot.positions[0]["price_date"] is None
+        assert snapshot.market_value == Decimal("900")
+        assert snapshot.total_asset == Decimal("1000")
+        assert failed.current_exposure == Decimal("0.9")
+        assert response.total_asset == Decimal("1000")
+        assert response.stale_warnings == [advice_service.MISSING_HELD_QUOTE_WARNING]
+        assert await repo.count_items(failed.id) == 0
+
+    await engine.dispose()
+
+
+def _stored_advice(user_id, signal_date, status, version=1):
+    return DailyAdvice(
+        id=uuid4(),
+        user_id=user_id,
+        portfolio_id=uuid4(),
+        profile_id=uuid4(),
+        source_snapshot_id=uuid4(),
+        signal_date=signal_date,
+        version=version,
+        status=status,
+        model_version="model-v1",
+        data_date=signal_date,
+        current_exposure=Decimal("0.2"),
+        target_exposure=Decimal("0.3"),
+        estimated_cash=Decimal("7000"),
+        constraint_violations=[],
+        generated_at=datetime(2026, 7, 17, 9, tzinfo=UTC),
+    )
+
+
+@pytest.mark.asyncio
+async def test_expiry_updates_all_and_only_user_scoped_unresolved_advice():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        for table in (DailyAdvice.__table__, AdviceItem.__table__, DailyBar.__table__):
+            await connection.run_sync(lambda sync, selected=table: selected.create(sync))
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    old_date = date(2026, 7, 16)
+    latest_date = date(2026, 7, 17)
+    other_user = UUID("00000000-0000-0000-0000-000000000002")
+    generating = _stored_advice(USER_ID, old_date, "generating", 1)
+    ready = _stored_advice(USER_ID, old_date, "ready", 2)
+    partial = _stored_advice(USER_ID, old_date, "partially_handled", 3)
+    handled = _stored_advice(USER_ID, old_date, "handled", 4)
+    failed = _stored_advice(USER_ID, old_date, "failed", 5)
+    superseded = _stored_advice(USER_ID, old_date, "superseded", 6)
+    current = _stored_advice(USER_ID, latest_date, "ready")
+    foreign = _stored_advice(other_user, old_date, "ready")
+    advices = [generating, ready, partial, handled, failed, superseded, current, foreign]
+
+    def pending_item(advice, symbol):
+        return AdviceItem(
+            id=uuid4(), advice_id=advice.id, symbol=symbol, name=symbol, industry=None,
+            action="hold", status="pending", current_quantity=100, target_quantity=100,
+            delta_quantity=0, current_weight=Decimal("0.1"), target_weight=Decimal("0.1"),
+            reference_price=Decimal("10"), price_tolerance=Decimal("0.03"),
+            score=Decimal("0.5"), rank=1, confidence="normal", positive_factors=[], risks=[],
+            invalidation_conditions=[], constraint_notes=[],
+        )
+
+    items = [
+        pending_item(ready, "000001"),
+        pending_item(partial, "000002"),
+        pending_item(handled, "000003"),
+        pending_item(current, "000004"),
+        pending_item(foreign, "000005"),
+    ]
+    async with session_factory() as db:
+        db.add_all(advices + items)
+        db.add(
+            DailyBar(
+                id=1, symbol="000001", trade_date=latest_date,
+                open=Decimal("10"), high=Decimal("10"), low=Decimal("10"),
+                close=Decimal("10"), volume=Decimal("1"),
+            )
+        )
+        await db.flush()
+
+        await advice_service.expire_stale_advice(db, USER_ID)
+        statuses = {
+            advice.id: advice.status
+            for advice in (
+                await db.execute(select(DailyAdvice).order_by(DailyAdvice.id))
+            ).scalars()
+        }
+        item_statuses = {
+            item.advice_id: item.status
+            for item in (await db.execute(select(AdviceItem))).scalars()
+        }
+
+    assert statuses[generating.id] == "expired"
+    assert statuses[ready.id] == "expired"
+    assert statuses[partial.id] == "expired"
+    assert statuses[handled.id] == "handled"
+    assert statuses[failed.id] == "failed"
+    assert statuses[superseded.id] == "superseded"
+    assert statuses[current.id] == "ready"
+    assert statuses[foreign.id] == "ready"
+    assert item_statuses[ready.id] == "expired"
+    assert item_statuses[partial.id] == "expired"
+    assert item_statuses[handled.id] == "pending"
+    assert item_statuses[current.id] == "pending"
+    assert item_statuses[foreign.id] == "pending"
+    await engine.dispose()

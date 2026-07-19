@@ -1343,13 +1343,13 @@ With the local Compose PostgreSQL service running and the default local developm
 docker compose exec -T postgres createdb -U quant quant_phase1_verify
 docker compose exec -T postgres psql -U quant -d quant_phase1_verify -tAc "SELECT current_database()"
 $env:DATABASE_URL = 'postgresql+asyncpg://quant:quant@127.0.0.1:5432/quant_phase1_verify'
-uv run --project backend alembic -c backend/alembic.ini upgrade head
+uv run --project backend alembic -c backend/alembic.ini upgrade d5f0a1b2c3d4
 uv run --project backend alembic -c backend/alembic.ini downgrade f4c9e8a7b6d5
-uv run --project backend alembic -c backend/alembic.ini upgrade head
+uv run --project backend alembic -c backend/alembic.ini upgrade d5f0a1b2c3d4
 Remove-Item Env:DATABASE_URL
 ```
 
-Expected: the database check prints exactly `quant_phase1_verify`; all migration commands exit 0 and the final head is `c2d4e6f8a0b1`. Re-run the database-name check immediately before cleanup, then remove only this database:
+Expected: the database check prints exactly `quant_phase1_verify`; all migration commands exit 0 and the final head is `d5f0a1b2c3d4`. Re-run the database-name check immediately before cleanup, then remove only this database:
 
 ```powershell
 docker compose exec -T postgres psql -U quant -d quant_phase1_verify -tAc "SELECT current_database()"

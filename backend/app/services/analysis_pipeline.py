@@ -101,16 +101,20 @@ class AnalysisPipeline:
         return await self._run_pipeline(run_id, trigger_type)
 
     async def _scheduled_run(self):
-        if not _is_trading_day():
+        signal_date = _shanghai_signal_date()
+        if not _is_trading_day(signal_date):
             logger.info("analysis_pipeline.skipped_non_trading_day")
-            await self._record_skip()
+            await self._record_skip(signal_date)
             return
         run_id = f"run_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}"
-        await self._run_pipeline(run_id, "scheduled")
+        await self._run_pipeline(run_id, "scheduled", signal_date)
 
-    async def _run_pipeline(self, run_id: str, trigger_type: str):
+    async def _run_pipeline(
+        self, run_id: str, trigger_type: str, signal_date: date | None = None
+    ):
         self._current_run_id = run_id
         started_at = datetime.now(UTC)
+        signal_date = signal_date or _shanghai_signal_date()
         stages_status = {}
 
         async with AsyncSessionLocal() as db:
@@ -133,7 +137,7 @@ class AnalysisPipeline:
             await self._publish_progress(stage, "running")
 
             try:
-                await self._execute_stage(stage)
+                await self._execute_stage(stage, signal_date)
                 stages_status[stage]["status"] = "done"
                 stages_status[stage]["finished_at"] = datetime.now(UTC).isoformat()
                 await self._update_run(run_id, stages=stages_status)
@@ -164,7 +168,7 @@ class AnalysisPipeline:
             event_bus.TOPIC_RANKING_READY,
             {
                 "run_id": run_id,
-                "date": str(date.today()),
+                "date": str(signal_date),
                 "message": "每日排名已更新",
             },
         )
@@ -172,7 +176,7 @@ class AnalysisPipeline:
         self._current_run_id = None
         async with AsyncSessionLocal() as db:
             prediction_count = await db.scalar(
-                select(func.count(Prediction.id)).where(Prediction.trade_date == date.today())
+                select(func.count(Prediction.id)).where(Prediction.trade_date == signal_date)
             )
         return {
             "run_id": run_id,
@@ -180,7 +184,7 @@ class AnalysisPipeline:
             "prediction_count": prediction_count or 0,
         }
 
-    async def _execute_stage(self, stage: str):
+    async def _execute_stage(self, stage: str, signal_date: date):
         if stage == "data_sync":
             from app.services.data_sync_service import data_sync_service
 
@@ -193,28 +197,28 @@ class AnalysisPipeline:
             from app.services.feature_engine import FeatureEngine
 
             fe = FeatureEngine()
-            await fe.compute_all_factors(date.today())
+            await fe.compute_all_factors(signal_date)
         elif stage == "model_prediction":
             from app.services.ml_model import ml_model_service
 
-            result = await ml_model_service.predict(date.today())
+            result = await ml_model_service.predict(signal_date)
             if result is None:
                 logger.warning("analysis_pipeline.no_active_model")
                 return
         elif stage == "shap_explanation":
             from app.services.ml_model import ml_model_service
 
-            await ml_model_service.explain_predictions(date.today())
+            await ml_model_service.explain_predictions(signal_date)
         elif stage == "ranking":
             from app.services.ranking_service import generate_daily_ranking
 
             async with AsyncSessionLocal() as db:
-                await generate_daily_ranking(db, date.today())
+                await generate_daily_ranking(db, signal_date)
                 await db.commit()
         elif stage == "portfolio_advice":
             from app.services.advice_service import generate_for_all_users
 
-            summary = await generate_for_all_users(_shanghai_signal_date())
+            summary = await generate_for_all_users(signal_date)
             for failure in summary["failed"]:
                 logger.warning("portfolio_advice.user_failed", **failure)
         else:
@@ -242,10 +246,10 @@ class AnalysisPipeline:
         except Exception:
             pass
 
-    async def _record_skip(self):
+    async def _record_skip(self, signal_date: date):
         async with AsyncSessionLocal() as db:
             run = AnalysisRun(
-                run_id=f"skip_{date.today().isoformat()}",
+                run_id=f"skip_{signal_date.isoformat()}",
                 trigger_type="scheduled",
                 started_at=datetime.now(UTC),
                 finished_at=datetime.now(UTC),
@@ -259,7 +263,7 @@ class AnalysisPipeline:
 
 def _is_trading_day(d: date | None = None) -> bool:
     if d is None:
-        d = date.today()
+        d = _shanghai_signal_date()
     if d.weekday() >= 5:
         return False
     return True

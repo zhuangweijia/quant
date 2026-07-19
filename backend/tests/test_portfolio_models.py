@@ -61,29 +61,3 @@ def test_portfolio_event_cash_delta_migration_is_required():
     )
 
     assert nullable is False
-
-
-def test_migration_adds_non_null_constraint_violations_default_empty():
-    migration_path = (
-        Path(__file__).parents[1]
-        / "alembic"
-        / "versions"
-        / "c2d4e6f8a0b1_add_portfolio_decision_domain.py"
-    )
-    tree = ast.parse(migration_path.read_text(encoding="utf-8"))
-    column = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "Column"
-        and isinstance(node.args[0], ast.Constant)
-        and node.args[0].value == "constraint_violations"
-    )
-    nullable = next(
-        keyword.value.value
-        for keyword in column.keywords
-        if keyword.arg == "nullable" and isinstance(keyword.value, ast.Constant)
-    )
-
-    assert nullable is False
