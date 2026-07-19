@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from app.models.daily_bar import DailyBar
@@ -70,7 +70,7 @@ class PortfolioRepository:
 
     def __init__(self, db: AsyncSession):
         self.db = db
-        self.opening_positions: list[Any] = []
+        self.snapshot_positions: list[Any] | None = None
 
     async def get_portfolio(self, user_id: str) -> Portfolio | None:
         result = await self.db.execute(select(Portfolio).where(Portfolio.user_id == user_id))
@@ -78,6 +78,18 @@ class PortfolioRepository:
 
     async def lock_user_for_setup(self, user_id: str) -> None:
         await self.db.execute(select(User.id).where(User.id == user_id).with_for_update())
+
+    async def lock_portfolio(self, user_id: str) -> Portfolio | None:
+        result = await self.db.execute(
+            select(Portfolio).where(Portfolio.user_id == user_id).with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def get_positions(self, portfolio_id: str | uuid.UUID) -> list[Position]:
+        result = await self.db.execute(
+            select(Position).where(Position.portfolio_id == portfolio_id)
+        )
+        return result.scalars().all()
 
     async def get_active_profile(self, user_id: str) -> InvestmentProfile | None:
         result = await self.db.execute(
@@ -129,7 +141,10 @@ class PortfolioRepository:
         return entity
 
     async def replace_positions(self, portfolio_id: str | uuid.UUID, positions: list[Any]) -> None:
+        await self.db.execute(delete(Position).where(Position.portfolio_id == portfolio_id))
         for item in positions:
+            if item.quantity == 0:
+                continue
             self.db.add(
                 Position(
                     id=uuid.uuid4(),
@@ -139,6 +154,34 @@ class PortfolioRepository:
                     total_cost=item.average_cost * item.quantity,
                 )
             )
+
+    async def create_event(
+        self,
+        portfolio_id: str | uuid.UUID,
+        *,
+        event_type: str,
+        symbol: str | None,
+        quantity_delta: int,
+        cash_delta: Decimal,
+        source_type: str,
+        source_id: str | None,
+        payload: dict[str, Any] | None,
+        occurred_at: datetime,
+    ) -> PortfolioEvent:
+        event = PortfolioEvent(
+            id=uuid.uuid4(),
+            portfolio_id=portfolio_id,
+            symbol=symbol,
+            event_type=event_type,
+            quantity_delta=quantity_delta,
+            cash_delta=cash_delta,
+            source_type=source_type,
+            source_id=source_id,
+            payload=payload,
+            occurred_at=occurred_at,
+        )
+        self.db.add(event)
+        return event
 
     async def create_opening_events(
         self, portfolio_id: str | uuid.UUID, cash: Decimal, positions: list[Any]
@@ -182,11 +225,32 @@ class PortfolioRepository:
         reference_id: str,
     ) -> PortfolioSnapshot:
         portfolio = next(
-            entity
-            for entity in self.db.new
-            if isinstance(entity, Portfolio) and entity.id == portfolio_id
+            (
+                entity
+                for entity in self.db.new
+                if isinstance(entity, Portfolio) and entity.id == portfolio_id
+            ),
+            None,
         )
-        valuations = await value_positions(self.db, self.opening_positions)
+        if portfolio is None:
+            result = await self.db.execute(select(Portfolio).where(Portfolio.id == portfolio_id))
+            portfolio = result.scalar_one()
+        positions = self.snapshot_positions
+        if positions is None:
+            stored_positions = await self.get_positions(portfolio_id)
+            positions = [
+                type("PositionValueInput", (), {
+                    "symbol": position.symbol,
+                    "quantity": position.quantity,
+                    "average_cost": (
+                        position.total_cost / position.quantity
+                        if position.quantity
+                        else Decimal("0")
+                    ),
+                })()
+                for position in stored_positions
+            ]
+        valuations = await value_positions(self.db, positions)
         market_value = sum((valuation.market_value for valuation in valuations), Decimal("0"))
         warnings = [v.valuation_warning for v in valuations if v.valuation_warning]
         snapshot = PortfolioSnapshot(
@@ -325,7 +389,7 @@ async def complete_setup(
     try:
         profile = await repo.create_profile(user_id, 1, payload.profile)
         portfolio = await repo.create_portfolio(user_id, payload.cash)
-        repo.opening_positions = payload.positions
+        repo.snapshot_positions = payload.positions
         await repo.replace_positions(portfolio.id, payload.positions)
         await repo.create_opening_events(portfolio.id, payload.cash, payload.positions)
         await repo.create_snapshot(portfolio.id, "setup", "profile", str(profile.id))
@@ -372,6 +436,123 @@ async def create_profile_version(
     if isinstance(profile, InvestmentProfile):
         return InvestmentProfileResponse.model_validate(profile)
     return profile
+
+
+def _position_state(positions: list[Any]) -> list[dict[str, Any]]:
+    state: list[dict[str, Any]] = []
+    for position in positions:
+        if position.quantity == 0:
+            continue
+        average_cost = getattr(position, "average_cost", None)
+        if average_cost is None:
+            average_cost = position.total_cost / position.quantity
+        state.append(
+            {
+                "symbol": position.symbol,
+                "quantity": position.quantity,
+                "average_cost": str(average_cost),
+            }
+        )
+    return state
+
+
+async def reconcile_holdings(
+    db: AsyncSession, user_id: str, payload: Any, request_meta: Any
+) -> PortfolioResponse:
+    repo = PortfolioRepository(db)
+    portfolio = await repo.lock_portfolio(user_id)
+    if portfolio is None:
+        raise HTTPException(status_code=404, detail="投资组合尚未初始化")
+    if portfolio.updated_at != payload.expected_updated_at:
+        raise HTTPException(status_code=409, detail="投资组合已更新，请刷新后重试")
+
+    await validate_symbols(db, [item.symbol for item in payload.positions])
+    before_positions = await repo.get_positions(portfolio.id)
+    before_state = _position_state(before_positions)
+    after_state = _position_state(payload.positions)
+    occurred_at = datetime.now(UTC)
+
+    repo.snapshot_positions = before_positions
+    await repo.create_snapshot(portfolio.id, "before_reconcile", "portfolio", str(portfolio.id))
+    await repo.replace_positions(portfolio.id, payload.positions)
+    before_cash = portfolio.cash
+    portfolio.cash = payload.cash
+    portfolio.last_confirmed_at = occurred_at
+    event = await repo.create_event(
+        portfolio.id,
+        event_type="reconcile",
+        symbol=None,
+        quantity_delta=0,
+        cash_delta=payload.cash - before_cash,
+        source_type="manual",
+        source_id=None,
+        payload={
+            "before": {"cash": str(before_cash), "positions": before_state},
+            "after": {"cash": str(payload.cash), "positions": after_state},
+        },
+        occurred_at=occurred_at,
+    )
+    repo.snapshot_positions = payload.positions
+    await repo.create_snapshot(portfolio.id, "after_reconcile", "portfolio_event", str(event.id))
+    changed_symbols = {
+        item["symbol"]
+        for item in before_state + after_state
+        if next((other for other in before_state if other["symbol"] == item["symbol"]), None)
+        != next((other for other in after_state if other["symbol"] == item["symbol"]), None)
+    }
+    await log_action(
+        db,
+        user_id=user_id,
+        action="portfolio.holdings_reconciled",
+        resource_type="portfolio",
+        resource_id=str(portfolio.id),
+        detail={
+            "before_position_count": len(before_state),
+            "after_position_count": len(after_state),
+            "changed_symbol_count": len(changed_symbols),
+        },
+        **_request_metadata(request_meta),
+    )
+    await db.flush()
+    return await repo.portfolio_response(user_id)
+
+
+async def record_cash_movement(
+    db: AsyncSession, user_id: str, payload: Any, request_meta: Any
+) -> PortfolioResponse:
+    repo = PortfolioRepository(db)
+    portfolio = await repo.lock_portfolio(user_id)
+    if portfolio is None:
+        raise HTTPException(status_code=404, detail="投资组合尚未初始化")
+
+    cash_delta = payload.amount if payload.kind == "deposit" else -payload.amount
+    if portfolio.cash + cash_delta < 0:
+        raise HTTPException(status_code=422, detail="现金余额不能为负数")
+
+    event = await repo.create_event(
+        portfolio.id,
+        event_type=f"cash_{payload.kind}",
+        symbol=None,
+        quantity_delta=0,
+        cash_delta=cash_delta,
+        source_type="manual",
+        source_id=None,
+        payload={"note": payload.note},
+        occurred_at=payload.occurred_at,
+    )
+    portfolio.cash += cash_delta
+    await repo.create_snapshot(portfolio.id, "cash_movement", "portfolio_event", str(event.id))
+    await log_action(
+        db,
+        user_id=user_id,
+        action="portfolio.cash_movement_recorded",
+        resource_type="portfolio",
+        resource_id=str(portfolio.id),
+        detail={"kind": payload.kind},
+        **_request_metadata(request_meta),
+    )
+    await db.flush()
+    return await repo.portfolio_response(user_id)
 
 
 async def get_portfolio_response(db: AsyncSession, user_id: str) -> PortfolioResponse:

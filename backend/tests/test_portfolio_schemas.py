@@ -78,6 +78,16 @@ def test_reconcile_and_cash_movement_require_aware_datetimes():
         )
 
 
+def test_reconcile_accepts_current_cash():
+    reconcile = HoldingsReconcileRequest(
+        expected_updated_at="2026-07-19T09:00:00+08:00",
+        cash=Decimal("100.0001"),
+        positions=[],
+    )
+
+    assert reconcile.cash == Decimal("100.0001")
+
+
 def test_executed_execution_requires_aware_trade_details():
     with pytest.raises(ValidationError):
         ExecutionUpdateRequest(disposition="executed", expected_revision=0)

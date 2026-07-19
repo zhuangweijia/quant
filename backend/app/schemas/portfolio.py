@@ -137,6 +137,7 @@ class PortfolioSummaryResponse(ResponseModel):
 
 class HoldingsReconcileRequest(StrictModel):
     expected_updated_at: datetime
+    cash: MonetaryDecimal = Field(ge=0)
     positions: list[PositionInput] = Field(default_factory=list, max_length=300)
 
     @model_validator(mode="after")

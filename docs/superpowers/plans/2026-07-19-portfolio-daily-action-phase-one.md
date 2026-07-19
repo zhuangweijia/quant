@@ -1218,7 +1218,7 @@ Expected: FAIL for missing page.
 
 - [ ] **Step 3: Implement the portfolio page**
 
-Use `BasicPage title="持仓"`. Summary cards show total asset, cash, market value, exposure, valuation date, and last confirmation. A profile card shows the active version and all constraints and opens an edit form that calls `updateProfile`. The table shows symbol/name/industry, quantity, average cost, latest close, market value, P&L, current weight, and target weight when an advice exists. Reconciliation opens a dialog with `HoldingsEditor` and includes `expected_updated_at`; cash movement opens a separate dialog with `deposit|withdrawal|fee`, positive amount, occurred time, and note.
+Use `BasicPage title="持仓"`. Summary cards show total asset, cash, market value, exposure, valuation date, and last confirmation. A profile card shows the active version and all constraints and opens an edit form that calls `updateProfile`. The table shows symbol/name/industry, quantity, average cost, latest close, market value, P&L, current weight, and target weight when an advice exists. Reconciliation opens a dialog with `HoldingsEditor`, editable current cash, and `expected_updated_at`; cash movement opens a separate dialog with `deposit|withdrawal|fee`, positive amount, occurred time, and note.
 
 Show valuation warnings inline. A 409 keeps edits, refreshes the latest portfolio, and asks the user to review differences before resubmitting.
 

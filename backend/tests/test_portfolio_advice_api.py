@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -5,7 +6,12 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.api.v1 import portfolio as portfolio_api
-from app.schemas.portfolio import InvestmentProfileInput, PortfolioSetupRequest
+from app.schemas.portfolio import (
+    CashMovementRequest,
+    HoldingsReconcileRequest,
+    InvestmentProfileInput,
+    PortfolioSetupRequest,
+)
 
 
 def profile_payload():
@@ -88,3 +94,31 @@ async def test_profile_update_passes_current_user_id(monkeypatch):
     )
 
     create_version.assert_awaited_once_with(db, user.id, payload, ("127.0.0.1", "test"))
+
+
+@pytest.mark.asyncio
+async def test_reconcile_and_cash_routes_use_current_user_id(monkeypatch):
+    reconcile = AsyncMock(return_value=SimpleNamespace())
+    cash_movement = AsyncMock(return_value=SimpleNamespace())
+    monkeypatch.setattr(portfolio_api.portfolio_service, "reconcile_holdings", reconcile)
+    monkeypatch.setattr(portfolio_api.portfolio_service, "record_cash_movement", cash_movement)
+    monkeypatch.setattr(
+        portfolio_api, "extract_request_info", lambda request: ("127.0.0.1", "test")
+    )
+    db = SimpleNamespace()
+    user = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
+    holdings = HoldingsReconcileRequest(
+        expected_updated_at=datetime(2026, 7, 19, 9, tzinfo=UTC), cash=Decimal("100")
+    )
+    movement = CashMovementRequest(
+        kind="deposit",
+        amount=Decimal("25"),
+        occurred_at=datetime(2026, 7, 19, 9, tzinfo=UTC),
+    )
+    request = SimpleNamespace(client=None, headers={})
+
+    await portfolio_api.reconcile_holdings(user=user, db=db, payload=holdings, request=request)
+    await portfolio_api.record_cash_movement(user=user, db=db, payload=movement, request=request)
+
+    reconcile.assert_awaited_once_with(db, user.id, holdings, ("127.0.0.1", "test"))
+    cash_movement.assert_awaited_once_with(db, user.id, movement, ("127.0.0.1", "test"))

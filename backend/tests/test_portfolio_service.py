@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -351,3 +351,135 @@ async def test_setup_failure_propagates_without_service_commit_or_partial_respon
     db.commit.assert_not_awaited()
     db.flush.assert_not_awaited()
     repo.portfolio_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_rejects_stale_updated_at(monkeypatch):
+    repo = SimpleNamespace(
+        lock_portfolio=AsyncMock(return_value=SimpleNamespace(updated_at="newer")),
+    )
+    monkeypatch.setattr(portfolio_service, "PortfolioRepository", lambda db: repo)
+
+    with pytest.raises(HTTPException) as exc:
+        await portfolio_service.reconcile_holdings(
+            SimpleNamespace(),
+            "user-1",
+            SimpleNamespace(expected_updated_at="older", cash=Decimal("100"), positions=[]),
+            None,
+        )
+
+    assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_reconcile_writes_before_and_after_snapshots(monkeypatch):
+    timestamp = datetime(2026, 7, 19, 9, tzinfo=UTC)
+    portfolio = SimpleNamespace(
+        id="portfolio-1",
+        cash=Decimal("100"),
+        updated_at=timestamp,
+        last_confirmed_at=None,
+    )
+    previous_positions = [
+        SimpleNamespace(symbol="000001", quantity=10, total_cost=Decimal("80")),
+    ]
+    event = SimpleNamespace(id="event-1")
+    repo = SimpleNamespace(
+        lock_portfolio=AsyncMock(return_value=portfolio),
+        get_positions=AsyncMock(return_value=previous_positions),
+        create_snapshot=AsyncMock(),
+        replace_positions=AsyncMock(),
+        create_event=AsyncMock(return_value=event),
+        portfolio_response=AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr(portfolio_service, "PortfolioRepository", lambda db: repo)
+    monkeypatch.setattr(portfolio_service, "validate_symbols", AsyncMock())
+    monkeypatch.setattr(portfolio_service, "log_action", AsyncMock())
+    db = SimpleNamespace(flush=AsyncMock())
+    positions = [SimpleNamespace(symbol="000002", quantity=20, average_cost=Decimal("12"))]
+    payload = SimpleNamespace(
+        expected_updated_at=timestamp, cash=Decimal("250"), positions=positions
+    )
+
+    await portfolio_service.reconcile_holdings(db, "user-1", payload, ("127.0.0.1", "test"))
+
+    assert [call.args[1] for call in repo.create_snapshot.await_args_list] == [
+        "before_reconcile",
+        "after_reconcile",
+    ]
+    assert repo.create_event.await_args.kwargs["cash_delta"] == Decimal("150")
+    assert repo.create_event.await_args.kwargs["event_type"] == "reconcile"
+    assert repo.create_event.await_args.kwargs["symbol"] is None
+    assert repo.create_event.await_args.kwargs["quantity_delta"] == 0
+    assert repo.create_event.await_args.kwargs["payload"] == {
+        "before": {
+            "cash": "100",
+            "positions": [{"symbol": "000001", "quantity": 10, "average_cost": "8"}],
+        },
+        "after": {
+            "cash": "250",
+            "positions": [{"symbol": "000002", "quantity": 20, "average_cost": "12"}],
+        },
+    }
+    assert portfolio.cash == Decimal("250")
+    assert portfolio.last_confirmed_at == repo.create_event.await_args.kwargs["occurred_at"]
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_cannot_make_cash_negative(monkeypatch):
+    repo = SimpleNamespace(
+        lock_portfolio=AsyncMock(return_value=SimpleNamespace(cash=Decimal("50"))),
+    )
+    monkeypatch.setattr(portfolio_service, "PortfolioRepository", lambda db: repo)
+
+    with pytest.raises(HTTPException) as exc:
+        await portfolio_service.record_cash_movement(
+            SimpleNamespace(),
+            "user-1",
+            SimpleNamespace(kind="withdrawal", amount=Decimal("100")),
+            None,
+        )
+
+    assert exc.value.status_code == 422
+
+
+async def assert_cash_delta(monkeypatch, kind, expected_delta):
+    portfolio = SimpleNamespace(id="portfolio-1", cash=Decimal("100"))
+    event = SimpleNamespace(id="event-1")
+    repo = SimpleNamespace(
+        lock_portfolio=AsyncMock(return_value=portfolio),
+        create_event=AsyncMock(return_value=event),
+        create_snapshot=AsyncMock(),
+        portfolio_response=AsyncMock(return_value=SimpleNamespace()),
+    )
+    monkeypatch.setattr(portfolio_service, "PortfolioRepository", lambda db: repo)
+    monkeypatch.setattr(portfolio_service, "log_action", AsyncMock())
+    db = SimpleNamespace(flush=AsyncMock())
+    occurred_at = datetime(2026, 7, 19, 9, tzinfo=UTC)
+    payload = SimpleNamespace(
+        kind=kind, amount=Decimal("25"), occurred_at=occurred_at, note="test note"
+    )
+
+    await portfolio_service.record_cash_movement(db, "user-1", payload, None)
+
+    assert repo.create_event.await_args.kwargs["cash_delta"] == expected_delta
+    assert repo.create_event.await_args.kwargs["occurred_at"] == occurred_at
+    assert repo.create_snapshot.await_args.args[1] == "cash_movement"
+    assert portfolio.cash == Decimal("100") + expected_delta
+    db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_deposit_has_positive_cash_delta(monkeypatch):
+    await assert_cash_delta(monkeypatch, "deposit", Decimal("25"))
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_has_negative_cash_delta(monkeypatch):
+    await assert_cash_delta(monkeypatch, "withdrawal", Decimal("-25"))
+
+
+@pytest.mark.asyncio
+async def test_fee_has_negative_cash_delta(monkeypatch):
+    await assert_cash_delta(monkeypatch, "fee", Decimal("-25"))
