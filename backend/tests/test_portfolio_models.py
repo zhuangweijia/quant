@@ -1,3 +1,6 @@
+import ast
+from pathlib import Path
+
 from app.models.advice import AdviceItem, DailyAdvice
 from app.models.execution import ExecutionMutation, ExecutionRecord
 from app.models.investment_profile import InvestmentProfile
@@ -25,3 +28,29 @@ def test_money_and_weight_columns_keep_decimal_precision():
     assert str(Position.__table__.c.total_cost.type) == "NUMERIC(20, 4)"
     assert str(InvestmentProfile.__table__.c.max_drawdown.type) == "NUMERIC(8, 6)"
     assert str(AdviceItem.__table__.c.target_weight.type) == "NUMERIC(10, 8)"
+
+
+def test_portfolio_event_cash_delta_migration_is_required():
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "c2d4e6f8a0b1_add_portfolio_decision_domain.py"
+    )
+    tree = ast.parse(migration_path.read_text(encoding="utf-8"))
+    cash_delta_column = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Column"
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "cash_delta"
+    )
+    nullable = next(
+        keyword.value.value
+        for keyword in cash_delta_column.keywords
+        if keyword.arg == "nullable" and isinstance(keyword.value, ast.Constant)
+    )
+
+    assert nullable is False

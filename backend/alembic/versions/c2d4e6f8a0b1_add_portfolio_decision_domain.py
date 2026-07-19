@@ -90,7 +90,7 @@ def upgrade() -> None:
         sa.Column("symbol", sa.String(length=16), nullable=True),
         sa.Column("event_type", sa.String(length=32), nullable=False),
         sa.Column("quantity_delta", sa.Integer(), nullable=False),
-        sa.Column("cash_delta", sa.Numeric(precision=20, scale=4), nullable=True),
+        sa.Column("cash_delta", sa.Numeric(precision=20, scale=4), nullable=False),
         sa.Column("source_type", sa.String(length=32), nullable=True),
         sa.Column("source_id", sa.String(length=64), nullable=True),
         sa.Column("reversal_of_id", sa.Uuid(), nullable=True),
