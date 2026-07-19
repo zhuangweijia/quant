@@ -22,7 +22,14 @@ export function apiErrorFromAxios(error: AxiosError): ApiError {
   const body = error.response?.data as
     | { message?: string; detail?: unknown }
     | undefined;
-  const detailMessage = typeof body?.detail === "string" ? body.detail : undefined;
+  const detailMessage = typeof body?.detail === "string"
+    ? body.detail
+    : typeof body?.detail === "object"
+      && body.detail !== null
+      && "message" in body.detail
+      && typeof body.detail.message === "string"
+      ? body.detail.message
+      : undefined;
   const message = body?.message || detailMessage || error.message || "网络错误";
   return new ApiError(message, body?.detail, error.response?.status);
 }

@@ -17,6 +17,7 @@ declare module 'vue' {
     ErrorNotFound: typeof import('./components/error/NotFound.vue')['default']
     GlobalLayoutBasicPage: typeof import('./components/global-layout/BasicPage.vue')['default']
     LayoutAppLayout: typeof import('./components/layout/AppLayout.vue')['default']
+    PortfolioHoldingsEditor: typeof import('./components/portfolio/HoldingsEditor.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     UiAlert: typeof import('./components/ui/alert/Alert.vue')['default']

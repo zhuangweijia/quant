@@ -52,7 +52,7 @@ ERROR_MESSAGES = {
     "market_history_incomplete": "候选股票历史行情不足",
     "mixed_model_versions": "当日排名包含多个模型版本",
     "portfolio_setup_required": "请先完成投资画像和组合设置",
-    "ranked_predictions_missing": "暂无可用的已排名预测",
+    "ranked_predictions_missing": "暂无可用的当日排名，请等待分析完成后再生成建议",
 }
 
 

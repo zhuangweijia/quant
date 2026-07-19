@@ -33,7 +33,7 @@ const registerSchema = loginSchema.extend({
   path: ['confirm_password'],
 })
 
-const { handleSubmit, errors, setValues, setFieldError, defineField } = useForm({
+const { handleSubmit, errors, resetForm, setFieldError, defineField } = useForm({
   validationSchema: toTypedSchema(loginSchema),
   initialValues: { username: '', password: '', confirm_password: '' },
 })
@@ -44,7 +44,7 @@ const [confirmPassword, confirmPasswordAttrs] = defineField('confirm_password')
 
 const toggleMode = () => {
   isRegister.value = !isRegister.value
-  setValues({ username: '', password: '', confirm_password: '' })
+  resetForm({ values: { username: '', password: '', confirm_password: '' } })
 }
 
 const onSubmit = handleSubmit(async (values) => {
@@ -65,7 +65,7 @@ const onSubmit = handleSubmit(async (values) => {
       await authStore.register(values as any)
       toast.success('注册成功，请使用新账户登录')
       isRegister.value = false
-      setValues({ username: '', password: '', confirm_password: '' })
+      resetForm({ values: { username: '', password: '', confirm_password: '' } })
     } else {
       await authStore.login({ username: values.username, password: values.password })
       const redirect = (route.query.redirect as string) || '/today'

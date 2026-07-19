@@ -181,6 +181,10 @@ async def test_generate_returns_409_when_ranked_predictions_are_missing(monkeypa
 
     assert exc.value.status_code == 409
     assert exc.value.detail["code"] == "ranked_predictions_missing"
+    assert (
+        exc.value.detail["message"]
+        == "暂无可用的当日排名，请等待分析完成后再生成建议"
+    )
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,21 @@ describe('apiErrorFromAxios', () => {
     expect(error.detail).toBe('当前密码不正确')
   })
 
+  it('uses a structured FastAPI detail message as the user-facing message', () => {
+    const detail = {
+      code: 'ranked_predictions_missing',
+      message: '暂无可用的当日排名，请等待分析完成后再生成建议',
+    }
+    const error = apiErrorFromAxios({
+      message: 'Request failed with status code 409',
+      response: { status: 409, data: { detail } },
+    } as never)
+
+    expect(error.message).toBe('暂无可用的当日排名，请等待分析完成后再生成建议')
+    expect(error.detail).toEqual(detail)
+    expect(error.status).toBe(409)
+  })
+
   it('retains the HTTP status without breaking the existing constructor', () => {
     const legacy = new ApiError('旧调用', { code: 'legacy' })
     const conflict = apiErrorFromAxios({
