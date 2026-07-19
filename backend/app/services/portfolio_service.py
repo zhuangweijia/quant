@@ -8,11 +8,13 @@ from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.models.daily_bar import DailyBar
 from app.models.investment_profile import InvestmentProfile
 from app.models.portfolio import Portfolio, PortfolioEvent, PortfolioSnapshot, Position
 from app.models.stock import Stock
+from app.models.user import User
 from app.schemas.portfolio import (
     InvestmentProfileResponse,
     PortfolioPositionResponse,
@@ -73,6 +75,9 @@ class PortfolioRepository:
     async def get_portfolio(self, user_id: str) -> Portfolio | None:
         result = await self.db.execute(select(Portfolio).where(Portfolio.user_id == user_id))
         return result.scalar_one_or_none()
+
+    async def lock_user_for_setup(self, user_id: str) -> None:
+        await self.db.execute(select(User.id).where(User.id == user_id).with_for_update())
 
     async def get_active_profile(self, user_id: str) -> InvestmentProfile | None:
         result = await self.db.execute(
@@ -284,6 +289,20 @@ async def validate_declared_capital(db: AsyncSession, payload: Any) -> None:
         )
 
 
+def is_setup_duplicate_integrity_error(error: IntegrityError) -> bool:
+    constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
+    if constraint in {"uq_portfolio_user", "uq_investment_profile_user_version"}:
+        return True
+    message = str(error.orig).lower()
+    return any(
+        marker in message
+        for marker in (
+            "unique constraint failed: portfolios.user_id",
+            "unique constraint failed: investment_profiles.user_id, investment_profiles.version",
+        )
+    )
+
+
 async def get_setup_status(db: AsyncSession, user_id: str) -> PortfolioSetupStatus:
     repo = PortfolioRepository(db)
     profile = await repo.get_active_profile(user_id)
@@ -298,27 +317,33 @@ async def complete_setup(
     db: AsyncSession, user_id: str, payload: Any, request_meta: Any
 ) -> PortfolioResponse:
     repo = PortfolioRepository(db)
+    await repo.lock_user_for_setup(user_id)
     if await repo.get_portfolio(user_id):
         raise HTTPException(status_code=409, detail="投资组合已经初始化")
     await validate_symbols(db, [item.symbol for item in payload.positions])
     await validate_declared_capital(db, payload)
-    profile = await repo.create_profile(user_id, 1, payload.profile)
-    portfolio = await repo.create_portfolio(user_id, payload.cash)
-    repo.opening_positions = payload.positions
-    await repo.replace_positions(portfolio.id, payload.positions)
-    await repo.create_opening_events(portfolio.id, payload.cash, payload.positions)
-    await repo.create_snapshot(portfolio.id, "setup", "profile", str(profile.id))
-    await log_action(
-        db,
-        user_id=user_id,
-        action="portfolio.setup",
-        resource_type="portfolio",
-        resource_id=str(portfolio.id),
-        detail={"positions": len(payload.positions)},
-        **_request_metadata(request_meta),
-    )
-    await db.flush()
-    return await repo.portfolio_response(user_id)
+    try:
+        profile = await repo.create_profile(user_id, 1, payload.profile)
+        portfolio = await repo.create_portfolio(user_id, payload.cash)
+        repo.opening_positions = payload.positions
+        await repo.replace_positions(portfolio.id, payload.positions)
+        await repo.create_opening_events(portfolio.id, payload.cash, payload.positions)
+        await repo.create_snapshot(portfolio.id, "setup", "profile", str(profile.id))
+        await log_action(
+            db,
+            user_id=user_id,
+            action="portfolio.setup",
+            resource_type="portfolio",
+            resource_id=str(portfolio.id),
+            detail={"positions": len(payload.positions)},
+            **_request_metadata(request_meta),
+        )
+        await db.flush()
+        return await repo.portfolio_response(user_id)
+    except IntegrityError as error:
+        if is_setup_duplicate_integrity_error(error):
+            raise HTTPException(status_code=409, detail="投资组合已经初始化") from error
+        raise
 
 
 async def create_profile_version(
