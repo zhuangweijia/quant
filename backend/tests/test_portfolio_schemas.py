@@ -1,3 +1,4 @@
+from datetime import datetime, tzinfo
 from decimal import Decimal
 
 import pytest
@@ -49,6 +50,8 @@ def test_skipped_execution_rejects_trade_fields():
         ExecutionUpdateRequest(
             disposition="skipped", quantity=100, price=Decimal("10"), expected_revision=0,
         )
+    with pytest.raises(ValidationError):
+        ExecutionUpdateRequest(disposition="skipped", fee=Decimal("0.01"), expected_revision=0)
 
 
 def test_profile_accepts_boundaries_and_rejects_extra_fields():
@@ -89,13 +92,21 @@ def test_executed_execution_requires_aware_trade_details():
 
 
 def test_setup_status_and_today_advice_enforce_contract_state():
-    status = PortfolioSetupStatus(complete=False, has_profile=False, has_portfolio=False)
-    assert status.missing == []
+    complete = PortfolioSetupStatus(has_profile=True, has_portfolio=True)
+    partial = PortfolioSetupStatus(has_profile=True, has_portfolio=False)
+    assert complete.complete is True
+    assert complete.missing == []
+    assert partial.complete is False
+    assert partial.missing == ["portfolio"]
+    with pytest.raises(ValidationError):
+        PortfolioSetupStatus(has_profile=True, has_portfolio=False, complete=True)
+    with pytest.raises(ValidationError):
+        PortfolioSetupStatus(has_profile=False, has_portfolio=True, missing=[])
     with pytest.raises(ValidationError):
         AdviceTodayResponse(state="ready")
 
 
-def test_profile_serializes_decimal_as_a_json_number():
+def test_ratio_decimal_serializes_as_a_json_number():
     profile = InvestmentProfileInput(
         investment_horizon_days=120,
         risk_level="balanced",
@@ -106,3 +117,40 @@ def test_profile_serializes_decimal_as_a_json_number():
         max_daily_turnover=Decimal("0.30"),
     )
     assert '"max_drawdown":0.15' in profile.model_dump_json()
+
+
+def test_money_decimal_serializes_as_an_exact_json_string():
+    setup = PortfolioSetupRequest(
+        profile=balanced_profile(),
+        total_capital=Decimal("10000000000000.0001"),
+        cash=Decimal("10000000000000.0001"),
+    )
+    assert setup.total_capital == Decimal("10000000000000.0001")
+    assert '"total_capital":"10000000000000.0001"' in setup.model_dump_json()
+
+
+class NoneOffsetTimezone(tzinfo):
+    def utcoffset(self, dt):
+        return None
+
+    def dst(self, dt):
+        return None
+
+    def tzname(self, dt):
+        return "none-offset"
+
+
+def test_none_offset_timezones_are_rejected():
+    none_offset = datetime(2026, 7, 19, 9, 0, tzinfo=NoneOffsetTimezone())
+    with pytest.raises(ValidationError):
+        HoldingsReconcileRequest(expected_updated_at=none_offset, positions=[])
+    with pytest.raises(ValidationError):
+        CashMovementRequest(kind="deposit", amount=Decimal("1"), occurred_at=none_offset)
+    with pytest.raises(ValidationError):
+        ExecutionUpdateRequest(
+            disposition="executed",
+            quantity=1,
+            price=Decimal("1"),
+            executed_at=none_offset,
+            expected_revision=0,
+        )

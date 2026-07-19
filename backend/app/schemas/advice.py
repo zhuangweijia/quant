@@ -5,7 +5,13 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from app.schemas.portfolio import JsonDecimal, ResponseModel, StrictModel
+from app.schemas.portfolio import (
+    MonetaryDecimal,
+    RatioDecimal,
+    ResponseModel,
+    StrictModel,
+    require_aware_datetime,
+)
 
 AdviceState = Literal[
     "not_generated", "generating", "ready", "partially_handled", "handled", "expired", "failed"
@@ -18,8 +24,8 @@ class ExecutionRecordResponse(ResponseModel):
     id: UUID
     disposition: Literal["executed", "partial", "skipped"]
     quantity: int
-    price: JsonDecimal | None
-    fee: JsonDecimal
+    price: MonetaryDecimal | None
+    fee: MonetaryDecimal
     executed_at: datetime | None
     reason: str
     within_price_band: bool
@@ -38,12 +44,12 @@ class AdviceItemResponse(ResponseModel):
     current_quantity: int = Field(ge=0)
     target_quantity: int = Field(ge=0)
     delta_quantity: int
-    current_average_cost: JsonDecimal | None = None
-    current_weight: JsonDecimal
-    target_weight: JsonDecimal
-    reference_price: JsonDecimal
-    price_tolerance: JsonDecimal
-    score: JsonDecimal
+    current_average_cost: MonetaryDecimal | None = None
+    current_weight: RatioDecimal
+    target_weight: RatioDecimal
+    reference_price: MonetaryDecimal
+    price_tolerance: RatioDecimal
+    score: RatioDecimal
     rank: int | None = Field(default=None, ge=1)
     confidence: str
     positive_factors: list[str]
@@ -60,11 +66,11 @@ class DailyAdviceResponse(ResponseModel):
     status: AdviceState
     model_version: str
     data_date: date
-    current_exposure: JsonDecimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    target_exposure: JsonDecimal = Field(ge=Decimal("0"), le=Decimal("1"))
-    current_cash: JsonDecimal
-    estimated_cash: JsonDecimal = Field(ge=0)
-    total_asset: JsonDecimal
+    current_exposure: RatioDecimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    target_exposure: RatioDecimal = Field(ge=Decimal("0"), le=Decimal("1"))
+    current_cash: MonetaryDecimal
+    estimated_cash: MonetaryDecimal = Field(ge=0)
+    total_asset: MonetaryDecimal
     generated_at: datetime
     portfolio_updated_at: datetime
     stale_warnings: list[str]
@@ -91,8 +97,8 @@ class AdviceTodayResponse(ResponseModel):
 class ExecutionUpdateRequest(StrictModel):
     disposition: Literal["executed", "partial", "skipped"]
     quantity: int = Field(default=0, ge=0)
-    price: JsonDecimal | None = Field(default=None, gt=0)
-    fee: JsonDecimal = Field(default=Decimal("0"), ge=0)
+    price: MonetaryDecimal | None = Field(default=None, gt=0)
+    fee: MonetaryDecimal = Field(default=Decimal("0"), ge=0)
     executed_at: datetime | None = None
     reason: str = Field(default="", max_length=512)
     expected_revision: int = Field(ge=0)
@@ -103,9 +109,11 @@ class ExecutionUpdateRequest(StrictModel):
         traded = self.disposition in {"executed", "partial"}
         if traded and (self.quantity <= 0 or self.price is None or self.executed_at is None):
             raise ValueError("执行或部分执行必须填写数量、价格和时间")
-        if self.executed_at is not None and self.executed_at.tzinfo is None:
-            raise ValueError("成交时间必须包含时区")
-        if not traded and (self.quantity or self.price is not None or self.executed_at is not None):
+        if self.executed_at is not None:
+            require_aware_datetime(self.executed_at, "成交时间必须包含时区")
+        if not traded and (
+            self.quantity or self.price is not None or self.executed_at is not None or self.fee != 0
+        ):
             raise ValueError("未执行不能填写成交数据")
         return self
 
