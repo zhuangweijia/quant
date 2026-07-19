@@ -7,6 +7,7 @@ from app.api.v1 import (
     dashboard,
     market,
     model,
+    portfolio,
     ranking,
     settings,
     setup,
@@ -27,3 +28,4 @@ router.include_router(stock_detail.router, prefix="/stocks", tags=["个股"])
 router.include_router(model.router, prefix="/model", tags=["模型"])
 router.include_router(analysis.router, prefix="/analysis", tags=["分析"])
 router.include_router(setup.router, prefix="/setup", tags=["首次配置"])
+router.include_router(portfolio.router, prefix="/portfolio", tags=["投资组合"])

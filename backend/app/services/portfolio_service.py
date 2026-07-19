@@ -1,0 +1,415 @@
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any
+
+from fastapi import HTTPException
+from sqlalchemy import select
+
+from app.models.daily_bar import DailyBar
+from app.models.investment_profile import InvestmentProfile
+from app.models.portfolio import Portfolio, PortfolioEvent, PortfolioSnapshot, Position
+from app.models.stock import Stock
+from app.schemas.portfolio import (
+    InvestmentProfileResponse,
+    PortfolioPositionResponse,
+    PortfolioResponse,
+    PortfolioSetupStatus,
+    PortfolioSummaryResponse,
+)
+from app.services.audit_service import log_action
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+
+@dataclass(frozen=True)
+class PositionValuation:
+    symbol: str
+    name: str
+    industry: str | None
+    quantity: int
+    average_cost: Decimal
+    latest_close: Decimal
+    price_date: date | None
+    market_value: Decimal
+    valuation_warning: str | None
+
+
+def _profile_values(profile: Any) -> dict[str, Any]:
+    return {
+        "investment_horizon_days": profile.investment_horizon_days,
+        "risk_level": profile.risk_level,
+        "max_drawdown": profile.max_drawdown,
+        "max_stock_weight": profile.max_stock_weight,
+        "max_industry_weight": profile.max_industry_weight,
+        "min_cash_ratio": profile.min_cash_ratio,
+        "max_daily_turnover": profile.max_daily_turnover,
+    }
+
+
+def _profile_constraints(profile: Any) -> dict[str, Any]:
+    return {
+        key: str(value) if isinstance(value, Decimal) else value
+        for key, value in _profile_values(profile).items()
+    }
+
+
+def _request_metadata(request_meta: tuple[str | None, str | None] | None) -> dict[str, str | None]:
+    ip_address, user_agent = request_meta or (None, None)
+    return {"ip_address": ip_address, "user_agent": user_agent}
+
+
+class PortfolioRepository:
+    """User-scoped persistence operations for the portfolio aggregate."""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+        self.opening_positions: list[Any] = []
+
+    async def get_portfolio(self, user_id: str) -> Portfolio | None:
+        result = await self.db.execute(select(Portfolio).where(Portfolio.user_id == user_id))
+        return result.scalar_one_or_none()
+
+    async def get_active_profile(self, user_id: str) -> InvestmentProfile | None:
+        result = await self.db.execute(
+            select(InvestmentProfile)
+            .where(
+                InvestmentProfile.user_id == user_id,
+                InvestmentProfile.is_active.is_(True),
+            )
+            .order_by(InvestmentProfile.version.desc())
+        )
+        return result.scalar_one_or_none()
+
+    async def get_active_profile_for_update(self, user_id: str) -> InvestmentProfile | None:
+        result = await self.db.execute(
+            select(InvestmentProfile)
+            .where(
+                InvestmentProfile.user_id == user_id,
+                InvestmentProfile.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        return result.scalar_one_or_none()
+
+    async def create_profile(
+        self, user_id: str, version: int, profile: Any
+    ) -> InvestmentProfile:
+        entity = InvestmentProfile(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            version=version,
+            is_active=True,
+            **_profile_values(profile),
+        )
+        self.db.add(entity)
+        return entity
+
+    async def deactivate_profile(self, profile: InvestmentProfile) -> None:
+        profile.is_active = False
+
+    async def create_portfolio(self, user_id: str, cash: Decimal) -> Portfolio:
+        entity = Portfolio(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            currency="CNY",
+            cash=cash,
+            last_confirmed_at=datetime.now(UTC),
+        )
+        self.db.add(entity)
+        return entity
+
+    async def replace_positions(self, portfolio_id: str | uuid.UUID, positions: list[Any]) -> None:
+        for item in positions:
+            self.db.add(
+                Position(
+                    id=uuid.uuid4(),
+                    portfolio_id=portfolio_id,
+                    symbol=item.symbol,
+                    quantity=item.quantity,
+                    total_cost=item.average_cost * item.quantity,
+                )
+            )
+
+    async def create_opening_events(
+        self, portfolio_id: str | uuid.UUID, cash: Decimal, positions: list[Any]
+    ) -> None:
+        occurred_at = datetime.now(UTC)
+        self.db.add(
+            PortfolioEvent(
+                id=uuid.uuid4(),
+                portfolio_id=portfolio_id,
+                symbol=None,
+                event_type="opening_cash",
+                quantity_delta=0,
+                cash_delta=cash,
+                source_type="setup",
+                source_id=None,
+                payload=None,
+                occurred_at=occurred_at,
+            )
+        )
+        for item in positions:
+            self.db.add(
+                PortfolioEvent(
+                    id=uuid.uuid4(),
+                    portfolio_id=portfolio_id,
+                    symbol=item.symbol,
+                    event_type="opening_position",
+                    quantity_delta=item.quantity,
+                    cash_delta=Decimal("0"),
+                    source_type="setup",
+                    source_id=None,
+                    payload={"average_cost": str(item.average_cost)},
+                    occurred_at=occurred_at,
+                )
+            )
+
+    async def create_snapshot(
+        self,
+        portfolio_id: str | uuid.UUID,
+        reason: str,
+        reference_type: str,
+        reference_id: str,
+    ) -> PortfolioSnapshot:
+        portfolio = next(
+            entity
+            for entity in self.db.new
+            if isinstance(entity, Portfolio) and entity.id == portfolio_id
+        )
+        valuations = await value_positions(self.db, self.opening_positions)
+        market_value = sum((valuation.market_value for valuation in valuations), Decimal("0"))
+        warnings = [v.valuation_warning for v in valuations if v.valuation_warning]
+        snapshot = PortfolioSnapshot(
+            id=uuid.uuid4(),
+            portfolio_id=portfolio_id,
+            reason=reason,
+            reference_type=reference_type,
+            reference_id=reference_id,
+            cash=portfolio.cash,
+            market_value=market_value,
+            total_asset=portfolio.cash + market_value,
+            price_date=(
+                None if warnings else max((v.price_date for v in valuations), default=None)
+            ),
+            positions=[
+                {
+                    "symbol": valuation.symbol,
+                    "quantity": valuation.quantity,
+                    "average_cost": str(valuation.average_cost),
+                    "latest_close": str(valuation.latest_close),
+                    "price_date": (
+                        valuation.price_date.isoformat()
+                        if valuation.price_date is not None
+                        else None
+                    ),
+                    "market_value": str(valuation.market_value),
+                    "valuation_warning": valuation.valuation_warning,
+                }
+                for valuation in valuations
+            ],
+            captured_at=datetime.now(UTC),
+        )
+        self.db.add(snapshot)
+        return snapshot
+
+    async def portfolio_response(self, user_id: str) -> PortfolioResponse:
+        return await get_portfolio_response(self.db, user_id)
+
+
+async def validate_symbols(db: AsyncSession, symbols: list[str]) -> None:
+    if not symbols:
+        return
+    result = await db.execute(select(Stock).where(Stock.symbol.in_(symbols)))
+    stocks = {stock.symbol: stock for stock in result.scalars().all()}
+    invalid = [
+        symbol for symbol in symbols if symbol not in stocks or not stocks[symbol].in_csi300
+    ]
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"股票不存在或不属于沪深300：{', '.join(invalid)}",
+        )
+
+
+async def value_positions(db: AsyncSession, positions: list[Any]) -> list[PositionValuation]:
+    if not positions:
+        return []
+    symbols = [position.symbol for position in positions]
+    stocks_result = await db.execute(select(Stock).where(Stock.symbol.in_(symbols)))
+    stocks = {stock.symbol: stock for stock in stocks_result.scalars().all()}
+    values: list[PositionValuation] = []
+    for position in positions:
+        bar_result = await db.execute(
+            select(DailyBar)
+            .where(DailyBar.symbol == position.symbol, DailyBar.trade_date <= date.today())
+            .order_by(DailyBar.trade_date.desc())
+            .limit(1)
+        )
+        bar = bar_result.scalar_one_or_none()
+        average_cost = position.average_cost
+        latest_close = bar.close if bar else average_cost
+        warning = None if bar else f"{position.symbol}缺少最新行情，已按成本价估值"
+        stock = stocks.get(position.symbol)
+        values.append(
+            PositionValuation(
+                symbol=position.symbol,
+                name=stock.name if stock else position.symbol,
+                industry=stock.industry if stock else None,
+                quantity=position.quantity,
+                average_cost=average_cost,
+                latest_close=latest_close,
+                price_date=bar.trade_date if bar else None,
+                market_value=latest_close * position.quantity,
+                valuation_warning=warning,
+            )
+        )
+    return values
+
+
+async def validate_declared_capital(db: AsyncSession, payload: Any) -> None:
+    valuations = await value_positions(db, payload.positions)
+    server_total = payload.cash + sum(
+        (valuation.market_value for valuation in valuations), Decimal("0")
+    )
+    tolerance = max(Decimal("100"), payload.total_capital * Decimal("0.01"))
+    if abs(payload.total_capital - server_total) > tolerance:
+        raise HTTPException(
+            status_code=422,
+            detail=f"申报总资产与服务器估值不一致，服务器估值为 {server_total}",
+        )
+
+
+async def get_setup_status(db: AsyncSession, user_id: str) -> PortfolioSetupStatus:
+    repo = PortfolioRepository(db)
+    profile = await repo.get_active_profile(user_id)
+    portfolio = await repo.get_portfolio(user_id)
+    return PortfolioSetupStatus(
+        has_profile=profile is not None,
+        has_portfolio=portfolio is not None,
+    )
+
+
+async def complete_setup(
+    db: AsyncSession, user_id: str, payload: Any, request_meta: Any
+) -> PortfolioResponse:
+    repo = PortfolioRepository(db)
+    if await repo.get_portfolio(user_id):
+        raise HTTPException(status_code=409, detail="投资组合已经初始化")
+    await validate_symbols(db, [item.symbol for item in payload.positions])
+    await validate_declared_capital(db, payload)
+    profile = await repo.create_profile(user_id, 1, payload.profile)
+    portfolio = await repo.create_portfolio(user_id, payload.cash)
+    repo.opening_positions = payload.positions
+    await repo.replace_positions(portfolio.id, payload.positions)
+    await repo.create_opening_events(portfolio.id, payload.cash, payload.positions)
+    await repo.create_snapshot(portfolio.id, "setup", "profile", str(profile.id))
+    await log_action(
+        db,
+        user_id=user_id,
+        action="portfolio.setup",
+        resource_type="portfolio",
+        resource_id=str(portfolio.id),
+        detail={"positions": len(payload.positions)},
+        **_request_metadata(request_meta),
+    )
+    await db.flush()
+    return await repo.portfolio_response(user_id)
+
+
+async def create_profile_version(
+    db: AsyncSession, user_id: str, payload: Any, request_meta: Any
+) -> InvestmentProfileResponse:
+    repo = PortfolioRepository(db)
+    active = await repo.get_active_profile_for_update(user_id)
+    if active is None:
+        raise HTTPException(status_code=409, detail="投资者画像尚未初始化")
+    await repo.deactivate_profile(active)
+    profile = await repo.create_profile(user_id, active.version + 1, payload)
+    await log_action(
+        db,
+        user_id=user_id,
+        action="portfolio.profile_version_created",
+        resource_type="investment_profile",
+        resource_id=str(profile.id),
+        detail={
+            "old": _profile_constraints(active),
+            "new": _profile_constraints(payload),
+            "version": profile.version,
+        },
+        **_request_metadata(request_meta),
+    )
+    await db.flush()
+    if isinstance(profile, InvestmentProfile):
+        return InvestmentProfileResponse.model_validate(profile)
+    return profile
+
+
+async def get_portfolio_response(db: AsyncSession, user_id: str) -> PortfolioResponse:
+    repo = PortfolioRepository(db)
+    profile = await repo.get_active_profile(user_id)
+    portfolio = await repo.get_portfolio(user_id)
+    if profile is None or portfolio is None:
+        raise HTTPException(status_code=404, detail="投资组合尚未初始化")
+    position_result = await db.execute(
+        select(Position).where(Position.portfolio_id == portfolio.id)
+    )
+    stored_positions = position_result.scalars().all()
+    inputs = [
+        type("PositionValueInput", (), {
+            "symbol": position.symbol,
+            "quantity": position.quantity,
+            "average_cost": (
+                position.total_cost / position.quantity
+                if position.quantity
+                else Decimal("0")
+            ),
+        })()
+        for position in stored_positions
+    ]
+    valuations = await value_positions(db, inputs)
+    market_value = sum((valuation.market_value for valuation in valuations), Decimal("0"))
+    total_asset = portfolio.cash + market_value
+    warnings = [
+        valuation.valuation_warning for valuation in valuations if valuation.valuation_warning
+    ]
+    response_positions = [
+        PortfolioPositionResponse(
+            id=position.id,
+            symbol=valuation.symbol,
+            name=valuation.name,
+            industry=valuation.industry,
+            quantity=valuation.quantity,
+            average_cost=valuation.average_cost,
+            latest_close=valuation.latest_close,
+            price_date=valuation.price_date,
+            market_value=valuation.market_value,
+            unrealized_pnl=valuation.market_value - (valuation.average_cost * valuation.quantity),
+            current_weight=(valuation.market_value / total_asset if total_asset else Decimal("0")),
+            valuation_warning=valuation.valuation_warning,
+        )
+        for position, valuation in zip(stored_positions, valuations, strict=True)
+    ]
+    return PortfolioResponse(
+        profile=InvestmentProfileResponse.model_validate(profile),
+        summary=PortfolioSummaryResponse(
+            id=portfolio.id,
+            currency=portfolio.currency,
+            cash=portfolio.cash,
+            market_value=market_value,
+            total_asset=total_asset,
+            exposure=(market_value / total_asset if total_asset else Decimal("0")),
+            valuation_date=(
+                None if warnings else max((v.price_date for v in valuations), default=None)
+            ),
+            last_confirmed_at=portfolio.last_confirmed_at,
+            updated_at=portfolio.updated_at,
+        ),
+        positions=response_positions,
+        valuation_warnings=warnings,
+        updated_at=portfolio.updated_at,
+    )
