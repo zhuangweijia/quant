@@ -8,7 +8,11 @@ export interface ValidationIssue {
 }
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly detail?: unknown) {
+  constructor(
+    message: string,
+    public readonly detail?: unknown,
+    public readonly status?: number,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -20,7 +24,7 @@ export function apiErrorFromAxios(error: AxiosError): ApiError {
     | undefined;
   const detailMessage = typeof body?.detail === "string" ? body.detail : undefined;
   const message = body?.message || detailMessage || error.message || "网络错误";
-  return new ApiError(message, body?.detail);
+  return new ApiError(message, body?.detail, error.response?.status);
 }
 
 const client: AxiosInstance = axios.create({
@@ -67,7 +71,7 @@ client.interceptors.response.use(
         const apiError = apiErrorFromAxios(error);
         const body = error.response?.data as { message?: string } | undefined;
         return Promise.reject(
-          new ApiError(body?.message || "用户名或密码错误", apiError.detail),
+          new ApiError(body?.message || "用户名或密码错误", apiError.detail, apiError.status),
         );
       }
 

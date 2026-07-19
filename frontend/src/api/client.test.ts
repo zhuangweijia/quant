@@ -29,4 +29,16 @@ describe('apiErrorFromAxios', () => {
     expect(error.message).toBe('当前密码不正确')
     expect(error.detail).toBe('当前密码不正确')
   })
+
+  it('retains the HTTP status without breaking the existing constructor', () => {
+    const legacy = new ApiError('旧调用', { code: 'legacy' })
+    const conflict = apiErrorFromAxios({
+      message: 'Request failed with status code 409',
+      response: { status: 409, data: { detail: { code: 'stale_portfolio' } } },
+    } as never)
+
+    expect(legacy.status).toBeUndefined()
+    expect(conflict.status).toBe(409)
+    expect(conflict.detail).toEqual({ code: 'stale_portfolio' })
+  })
 })
