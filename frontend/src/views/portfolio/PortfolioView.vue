@@ -70,6 +70,8 @@ const reconcileLatestUpdatedAt = ref('')
 const reconcileError = ref('')
 const reconcileDetail = ref('')
 const reconcileConflict = ref(false)
+const reconcileRefreshing = ref(false)
+const reconcileRefreshError = ref('')
 
 const cashOpen = ref(false)
 const cashSaving = ref(false)
@@ -148,6 +150,7 @@ async function loadPortfolio() {
   } catch (caught) {
     if (caught instanceof ApiError && caught.status === 404) {
       portfolioMissing.value = true
+      store.error = null
     } else {
       loadError.value = errorMessage(caught)
     }
@@ -269,6 +272,8 @@ function openReconcileEditor() {
   reconcileError.value = ''
   reconcileDetail.value = ''
   reconcileConflict.value = false
+  reconcileRefreshing.value = false
+  reconcileRefreshError.value = ''
   reconcileOpen.value = true
 }
 
@@ -278,6 +283,8 @@ async function submitReconcile() {
   reconcileError.value = ''
   reconcileDetail.value = ''
   reconcileConflict.value = false
+  reconcileLatestUpdatedAt.value = ''
+  reconcileRefreshError.value = ''
   try {
     await store.reconcileHoldings({
       expected_updated_at: reconcileExpectedUpdatedAt.value,
@@ -290,18 +297,25 @@ async function submitReconcile() {
     reconcileDetail.value = detailMessage(caught)
     if (caught instanceof ApiError && caught.status === 409) {
       reconcileConflict.value = true
-      try {
-        const latest = await store.loadPortfolio()
-        reconcileLatestUpdatedAt.value = latest.updated_at
-      } catch (refreshError) {
-        const refreshMessage = `最新组合刷新失败：${errorMessage(refreshError)}`
-        reconcileDetail.value = reconcileDetail.value
-          ? `${reconcileDetail.value}；${refreshMessage}`
-          : refreshMessage
-      }
+      await refreshConflictLatest()
     }
   } finally {
     reconcileSaving.value = false
+  }
+}
+
+async function refreshConflictLatest() {
+  if (!reconcileConflict.value || reconcileRefreshing.value) return
+  reconcileRefreshing.value = true
+  reconcileRefreshError.value = ''
+  reconcileLatestUpdatedAt.value = ''
+  try {
+    const latest = await store.loadPortfolio()
+    reconcileLatestUpdatedAt.value = latest.updated_at
+  } catch (caught) {
+    reconcileRefreshError.value = `最新组合刷新失败：${errorMessage(caught)}`
+  } finally {
+    reconcileRefreshing.value = false
   }
 }
 
@@ -311,6 +325,7 @@ function adoptLatestReconcileVersion() {
   reconcileConflict.value = false
   reconcileError.value = ''
   reconcileDetail.value = ''
+  reconcileRefreshError.value = ''
 }
 
 function localDateTimeValue(date: Date): string {
@@ -420,6 +435,15 @@ async function submitCashMovement() {
       <WalletCards class="mx-auto size-9 text-muted-foreground" />
       <p class="mt-4 font-medium">尚未建立投资组合</p>
       <p class="mt-2 text-sm text-muted-foreground">请先完成组合初始化，再在这里维护持仓。</p>
+      <Button
+        data-testid="portfolio-retry"
+        class="mt-4"
+        type="button"
+        variant="outline"
+        @click="loadPortfolio"
+      >
+        重试
+      </Button>
     </div>
 
     <template v-else>
@@ -528,8 +552,25 @@ async function submitCashMovement() {
         <DialogHeader><DialogTitle>核对现金与持仓</DialogTitle><DialogDescription>基准更新时间：{{ reconcileExpectedUpdatedAt }}。保存时会按此版本检查并发修改。</DialogDescription></DialogHeader>
         <HoldingsEditor v-model:cash="reconcileCash" v-model:positions="reconcilePositions" />
         <p v-if="reconcileValidationError" class="text-sm text-destructive">{{ reconcileValidationError }}</p>
-        <div v-if="reconcileError" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive"><p>{{ reconcileError }}</p><p v-if="reconcileDetail && reconcileDetail !== reconcileError" class="mt-1">{{ reconcileDetail }}</p><template v-if="reconcileConflict"><p class="mt-2 font-medium">组合已刷新。请核对差异后重试；本次编辑不会自动重提。</p><Button v-if="reconcileLatestUpdatedAt" data-testid="reconcile-adopt-latest" class="mt-3" type="button" size="sm" variant="outline" @click="adoptLatestReconcileVersion">采用最新版本，保留当前编辑</Button></template><p v-else class="mt-1 text-xs">现金与持仓编辑均已保留。</p></div>
-        <DialogFooter><Button type="button" variant="outline" @click="reconcileOpen = false">取消</Button><Button data-testid="reconcile-submit" type="button" :loading="reconcileSaving" :disabled="!!reconcileValidationError" @click="submitReconcile">保存对账</Button></DialogFooter>
+        <div v-if="reconcileError" role="alert" class="rounded-md border border-destructive/40 p-3 text-sm text-destructive">
+          <p>{{ reconcileError }}</p>
+          <p v-if="reconcileDetail && reconcileDetail !== reconcileError" class="mt-1">{{ reconcileDetail }}</p>
+          <template v-if="reconcileConflict">
+            <p v-if="reconcileRefreshing" class="mt-2 font-medium">正在刷新最新组合版本…</p>
+            <template v-else-if="reconcileLatestUpdatedAt">
+              <p class="mt-2 font-medium">已获取最新组合版本：{{ reconcileLatestUpdatedAt }}</p>
+              <p class="mt-1">请核对差异后重试；本次编辑不会自动重提。</p>
+              <Button data-testid="reconcile-adopt-latest" class="mt-3" type="button" size="sm" variant="outline" @click="adoptLatestReconcileVersion">采用最新版本，保留当前编辑</Button>
+            </template>
+            <template v-else>
+              <p class="mt-2 font-medium">最新组合尚未刷新，不能使用旧版本再次保存。</p>
+              <p v-if="reconcileRefreshError" class="mt-1">{{ reconcileRefreshError }}</p>
+              <Button data-testid="reconcile-refresh-latest" class="mt-3" type="button" size="sm" variant="outline" :loading="reconcileRefreshing" @click="refreshConflictLatest">重新刷新最新组合</Button>
+            </template>
+          </template>
+          <p v-else class="mt-1 text-xs">现金与持仓编辑均已保留。</p>
+        </div>
+        <DialogFooter><Button type="button" variant="outline" @click="reconcileOpen = false">取消</Button><Button data-testid="reconcile-submit" type="button" :loading="reconcileSaving" :disabled="!!reconcileValidationError || reconcileConflict" @click="submitReconcile">保存对账</Button></DialogFooter>
       </DialogScrollContent>
     </Dialog>
 

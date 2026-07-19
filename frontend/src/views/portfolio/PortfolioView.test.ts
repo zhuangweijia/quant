@@ -3,6 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import { portfolioApi } from '@/api/portfolio'
 import { usePortfolioStore } from '@/stores/portfolio'
 import type {
   InvestmentProfileResponse,
@@ -160,15 +161,42 @@ describe('PortfolioView', () => {
 
   it('shows an empty workspace separately from a valid cash-only portfolio', async () => {
     const store = usePortfolioStore()
-    vi.spyOn(store, 'loadPortfolio').mockRejectedValue(
-      new ApiError('投资组合尚未初始化', undefined, 404),
-    )
+    const loaded = portfolio()
+    const getPortfolio = vi.spyOn(portfolioApi, 'getPortfolio')
+      .mockRejectedValueOnce(new ApiError('投资组合尚未初始化', undefined, 404))
+      .mockResolvedValueOnce({ data: loaded } as never)
     const wrapper = mountView()
     await flushPromises()
 
     expect(store.portfolio).toBeNull()
+    expect(store.error).toBeNull()
     expect(wrapper.text()).toContain('尚未建立投资组合')
     expect(wrapper.text()).not.toContain('暂无持仓')
+    expect(wrapper.find('[data-testid="portfolio-retry"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="portfolio-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(getPortfolio).toHaveBeenCalledTimes(2)
+    expect(store.error).toBeNull()
+    expect(store.portfolio).toEqual(loaded)
+    expect(wrapper.text()).toContain('100000.1234')
+    expect(wrapper.text()).not.toContain('尚未建立投资组合')
+  })
+
+  it('keeps non-404 API failures in the retryable error state', async () => {
+    const store = usePortfolioStore()
+    vi.spyOn(portfolioApi, 'getPortfolio').mockRejectedValue(
+      new ApiError('服务暂不可用', undefined, 503),
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(store.error).toBe('服务暂不可用')
+    expect(wrapper.text()).toContain('加载持仓失败')
+    expect(wrapper.text()).toContain('服务暂不可用')
+    expect(wrapper.text()).not.toContain('尚未建立投资组合')
+    expect(wrapper.find('[data-testid="portfolio-retry"]').exists()).toBe(true)
   })
 
   it('test_cash_only_portfolio_is_not_request_error', async () => {
@@ -317,6 +345,73 @@ describe('PortfolioView', () => {
       cash: '95555.0001',
       positions: [
         { symbol: '000001', quantity: 300, average_cost: '10.9999' },
+        { symbol: '000002', quantity: 100, average_cost: '8.50' },
+      ],
+    })
+  })
+
+  it('recovers a failed conflict refresh without dropping edits or reusing the stale token', async () => {
+    const initial = portfolio('2026-07-19T09:00:00+08:00')
+    const latest = portfolio('2026-07-19T10:00:00+08:00')
+    const store = usePortfolioStore()
+    const load = vi.spyOn(store, 'loadPortfolio')
+      .mockImplementationOnce(async () => { store.portfolio = initial; return initial })
+      .mockRejectedValueOnce(new Error('刷新网络不可用'))
+      .mockRejectedValueOnce(new Error('刷新仍然不可用'))
+      .mockImplementationOnce(async () => { store.portfolio = latest; return latest })
+    const reconcile = vi.spyOn(store, 'reconcileHoldings')
+      .mockRejectedValueOnce(
+        new ApiError('组合已更新', { current_updated_at: latest.updated_at }, 409),
+      )
+      .mockResolvedValueOnce(latest)
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[data-testid="portfolio-reconcile"]').trigger('click')
+    await setInput('#portfolio-cash', '94444.0001')
+    await setInput('#holding-cost-0', '10.8888')
+    await click('[data-testid="reconcile-submit"]')
+
+    expect(reconcile).toHaveBeenCalledOnce()
+    expect(load).toHaveBeenCalledTimes(2)
+    expect(document.body.textContent).toContain('最新组合刷新失败：刷新网络不可用')
+    expect(document.body.textContent).not.toContain('组合已刷新')
+    expect(document.body.textContent).toContain(initial.updated_at)
+    expect(document.querySelector('[data-testid="reconcile-adopt-latest"]')).toBeNull()
+    expect(document.querySelector('[data-testid="reconcile-refresh-latest"]')).not.toBeNull()
+    expect(getElement<HTMLButtonElement>('[data-testid="reconcile-submit"]').disabled).toBe(true)
+    expect(getElement<HTMLInputElement>('#portfolio-cash').value).toBe('94444.0001')
+    expect(getElement<HTMLInputElement>('#holding-cost-0').value).toBe('10.8888')
+
+    await click('[data-testid="reconcile-refresh-latest"]')
+    expect(load).toHaveBeenCalledTimes(3)
+    expect(reconcile).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain('最新组合刷新失败：刷新仍然不可用')
+    expect(document.querySelector('[data-testid="reconcile-refresh-latest"]')).not.toBeNull()
+    expect(getElement<HTMLInputElement>('#portfolio-cash').value).toBe('94444.0001')
+
+    await click('[data-testid="reconcile-refresh-latest"]')
+    expect(load).toHaveBeenCalledTimes(4)
+    expect(reconcile).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain('已获取最新组合版本')
+    expect(document.body.textContent).toContain(latest.updated_at)
+    expect(document.querySelector('[data-testid="reconcile-adopt-latest"]')).not.toBeNull()
+    expect(getElement<HTMLButtonElement>('[data-testid="reconcile-submit"]').disabled).toBe(true)
+
+    await click('[data-testid="reconcile-adopt-latest"]')
+    expect(reconcile).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain(latest.updated_at)
+    expect(getElement<HTMLInputElement>('#portfolio-cash').value).toBe('94444.0001')
+    expect(getElement<HTMLInputElement>('#holding-cost-0').value).toBe('10.8888')
+    expect(getElement<HTMLButtonElement>('[data-testid="reconcile-submit"]').disabled).toBe(false)
+
+    await click('[data-testid="reconcile-submit"]')
+    expect(reconcile).toHaveBeenCalledTimes(2)
+    expect(reconcile).toHaveBeenNthCalledWith(2, {
+      expected_updated_at: latest.updated_at,
+      cash: '94444.0001',
+      positions: [
+        { symbol: '000001', quantity: 300, average_cost: '10.8888' },
         { symbol: '000002', quantity: 100, average_cost: '8.50' },
       ],
     })
