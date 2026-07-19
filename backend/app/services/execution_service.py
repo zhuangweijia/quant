@@ -76,17 +76,21 @@ class ExecutionRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
-    async def find_mutation(self, user_id: Any, idempotency_key: str):
+    async def find_mutation(self, user_id: Any, item_id: Any, idempotency_key: str):
         result = await self.db.execute(
-            select(ExecutionMutation, ExecutionRecord.user_id)
+            select(
+                ExecutionMutation,
+                ExecutionRecord.user_id,
+                ExecutionRecord.advice_item_id,
+            )
             .join(ExecutionRecord, ExecutionRecord.id == ExecutionMutation.execution_id)
             .where(ExecutionMutation.idempotency_key == idempotency_key)
         )
         row = result.one_or_none()
         if row is None:
             return None
-        mutation, owner_id = row
-        if owner_id != user_id:
+        mutation, owner_id, mutation_item_id = row
+        if owner_id != user_id or mutation_item_id != item_id:
             raise _conflict(
                 "idempotency_key_conflict",
                 "该幂等键已用于其他执行请求，请更换后重试",
@@ -176,7 +180,10 @@ class ExecutionRepository:
         count = await self.db.scalar(
             select(func.count(PortfolioEvent.id)).where(
                 PortfolioEvent.portfolio_id == portfolio_id,
-                PortfolioEvent.symbol == symbol,
+                or_(
+                    PortfolioEvent.symbol == symbol,
+                    PortfolioEvent.event_type == "reconcile",
+                ),
                 PortfolioEvent.created_at >= anchor,
                 or_(
                     PortfolioEvent.source_type.is_(None),
@@ -390,7 +397,7 @@ def _trade_deltas(
 def _aggregate_advice_status(advice: DailyAdvice, items: list[AdviceItem]) -> str:
     if advice.status == "expired":
         return "expired"
-    statuses = [item.status for item in items]
+    statuses = [item.status for item in items if item.action != "hold"]
     if statuses and all(status in HANDLED_ITEM_STATUSES for status in statuses):
         return "handled"
     if any(status != "pending" for status in statuses):
@@ -451,7 +458,7 @@ async def update_execution(
     request_meta: tuple[str | None, str | None] | None,
 ) -> ExecutionResponse:
     repo = ExecutionRepository(db)
-    prior_mutation = await repo.find_mutation(user_id, idempotency_key)
+    prior_mutation = await repo.find_mutation(user_id, item_id, idempotency_key)
     if prior_mutation is not None:
         return repo.response_from_state(prior_mutation.after_state)
 
@@ -460,7 +467,7 @@ async def update_execution(
         raise HTTPException(status_code=404, detail="建议项不存在")
 
     # A second check closes the race between the optimistic replay lookup and row lock.
-    prior_mutation = await repo.find_mutation(user_id, idempotency_key)
+    prior_mutation = await repo.find_mutation(user_id, item_id, idempotency_key)
     if prior_mutation is not None:
         return repo.response_from_state(prior_mutation.after_state)
 

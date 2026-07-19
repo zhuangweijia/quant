@@ -116,6 +116,8 @@ class ExecutionUpdateRequest(StrictModel):
             self.quantity or self.price is not None or self.executed_at is not None or self.fee != 0
         ):
             raise ValueError("未执行不能填写成交数据")
+        if not traded and not self.reason.strip():
+            raise ValueError("未执行必须填写原因")
         return self
 
 

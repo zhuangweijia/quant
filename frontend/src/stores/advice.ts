@@ -30,6 +30,24 @@ interface AdviceTodayMetadata {
   error_message: string | null
 }
 
+interface ExecutionMutationIdentity {
+  fingerprint: string
+  idempotencyKey: string
+}
+
+function executionFingerprint(payload: ExecutionUpdateRequest): string {
+  return JSON.stringify([
+    payload.disposition,
+    payload.quantity ?? 0,
+    payload.price ?? null,
+    payload.fee ?? '0',
+    payload.executed_at ?? null,
+    payload.reason ?? '',
+    payload.expected_revision,
+    payload.acknowledge_outside_advice ?? false,
+  ])
+}
+
 function requireAdvice(
   state: AdviceState,
   advice: DailyAdviceResponse | null,
@@ -71,6 +89,7 @@ export const useAdviceStore = defineStore('advice', () => {
   const today = ref<AdviceTodayResponse | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  const executionMutationIdentities = new Map<string, ExecutionMutationIdentity>()
   let activeRequests = 0
 
   async function request<T>(operation: () => Promise<T>): Promise<T> {
@@ -106,10 +125,16 @@ export const useAdviceStore = defineStore('advice', () => {
 
   function updateExecution(itemId: string, payload: ExecutionUpdateRequest) {
     return request(async () => {
+      const fingerprint = executionFingerprint(payload)
+      const previousIdentity = executionMutationIdentities.get(itemId)
+      const idempotencyKey = previousIdentity?.fingerprint === fingerprint
+        ? previousIdentity.idempotencyKey
+        : crypto.randomUUID()
+      executionMutationIdentities.set(itemId, { fingerprint, idempotencyKey })
       const response = await adviceApi.updateExecution(
         itemId,
         payload,
-        crypto.randomUUID(),
+        idempotencyKey,
       )
       applyExecution(response.data)
       const portfolioStore = usePortfolioStore()

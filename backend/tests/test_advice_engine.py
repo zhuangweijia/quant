@@ -282,10 +282,34 @@ def test_cost_reserve_loop_terminates_when_all_buys_must_be_removed():
     assert result.estimated_cash == Decimal("100000")
 
 
+def test_fully_invested_portfolio_generates_progressive_reduction_advice():
+    held = EnginePosition(
+        "600000", "浦发银行", "银行", 1000, Decimal("10"), Decimal("10000")
+    )
+
+    result = build_advice(PROFILE, Decimal("0"), (held,), (), Decimal("0"))
+
+    assert result.total_asset == Decimal("10000")
+    assert result.lines[0].action == "reduce"
+    assert result.lines[0].target_quantity == 400
+    assert result.lines[0].delta_quantity == -600
+    assert result.estimated_cash == Decimal("6000")
+    assert result.turnover == PROFILE.max_daily_turnover
+
+
+def test_engine_rejects_zero_total_asset_even_when_a_zero_quantity_position_exists():
+    empty_position = EnginePosition(
+        "600000", "浦发银行", "银行", 0, Decimal("10"), Decimal("0")
+    )
+
+    with pytest.raises(ValueError, match="total asset"):
+        build_advice(PROFILE, Decimal("0"), (empty_position,), (), Decimal("0"))
+
+
 @pytest.mark.parametrize(
     ("cash", "positions", "candidates", "message"),
     [
-        (Decimal("0"), (), (), "cash"),
+        (Decimal("-1"), (), (), "cash"),
         (
             Decimal("1"),
             (),

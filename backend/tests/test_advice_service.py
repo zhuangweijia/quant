@@ -328,26 +328,39 @@ async def test_repository_loads_user_scoped_inputs_in_batched_queries():
                 ("000002", trade_date, Decimal(20 + 2 * offset) / Decimal("10")),
             ]
         )
-    db = SimpleNamespace(
-        execute=AsyncMock(
-            side_effect=[
-                ScalarResult(profile),
-                ScalarResult(portfolio),
-                ScalarsResult(positions),
-                ScalarsResult(predictions),
-                ScalarsResult(stocks),
-                ScalarsResult(closes),
-                ScalarsResult(sorted({row[1] for row in history}, reverse=True)),
-                RowsResult(history),
-            ]
-        )
+    remaining_results = iter(
+        [
+            ScalarsResult(positions),
+            ScalarsResult(predictions),
+            ScalarsResult(stocks),
+            ScalarsResult(closes),
+            ScalarsResult(sorted({row[1] for row in history}, reverse=True)),
+            RowsResult(history),
+        ]
     )
+
+    def execute_result(statement):
+        query = str(statement)
+        if "FROM portfolios" in query:
+            return ScalarResult(portfolio)
+        if "FROM investment_profiles" in query:
+            return ScalarResult(profile)
+        return next(remaining_results)
+
+    db = SimpleNamespace(execute=AsyncMock(side_effect=execute_result))
 
     loaded = await advice_service.AdviceRepository(db).load_inputs(USER_ID, SIGNAL_DATE)
 
     assert db.execute.await_count == 8
-    assert "investment_profiles.user_id" in str(db.execute.await_args_list[0].args[0])
-    assert "portfolios.user_id" in str(db.execute.await_args_list[1].args[0])
+    portfolio_query = str(db.execute.await_args_list[0].args[0])
+    profile_query = str(db.execute.await_args_list[1].args[0])
+    positions_query = str(db.execute.await_args_list[2].args[0])
+    assert "portfolios.user_id" in portfolio_query
+    assert "FOR UPDATE" in portfolio_query
+    assert "investment_profiles.user_id" in profile_query
+    assert "FOR UPDATE" in profile_query
+    assert "portfolio_positions.portfolio_id" in positions_query
+    assert "FOR UPDATE" in positions_query
     assert "stocks.in_csi300 IS true" in str(db.execute.await_args_list[4].args[0])
     common_query = str(db.execute.await_args_list[6].args[0])
     assert "GROUP BY daily_bars.trade_date" in common_query
@@ -371,8 +384,8 @@ async def test_repository_rejects_mixed_prediction_model_versions():
     db = SimpleNamespace(
         execute=AsyncMock(
             side_effect=[
-                ScalarResult(profile),
                 ScalarResult(portfolio),
+                ScalarResult(profile),
                 ScalarsResult([]),
                 ScalarsResult(predictions),
             ]
@@ -383,6 +396,49 @@ async def test_repository_rejects_mixed_prediction_model_versions():
         await advice_service.AdviceRepository(db).load_inputs(USER_ID, SIGNAL_DATE)
 
     assert exc.value.code == "mixed_model_versions"
+
+
+@pytest.mark.asyncio
+async def test_generation_lock_is_acquired_before_existing_advice_is_read(monkeypatch):
+    events = []
+    existing = SimpleNamespace(id="advice-1", status="ready")
+    db = SimpleNamespace(
+        get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        execute=AsyncMock(side_effect=lambda *_args, **_kwargs: events.append("lock")),
+    )
+    repo = SimpleNamespace(
+        find_current=AsyncMock(
+            side_effect=lambda *_args, **_kwargs: (events.append("find"), existing)[1]
+        )
+    )
+    monkeypatch.setattr(advice_service, "AdviceRepository", lambda _db: repo)
+
+    result = await advice_service.generate_for_user(db, USER_ID, SIGNAL_DATE)
+
+    assert result is existing
+    assert events == ["lock", "find"]
+
+
+@pytest.mark.asyncio
+async def test_today_returns_generating_while_user_generation_lock_is_held(monkeypatch):
+    db = SimpleNamespace(
+        get_bind=lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+        scalar=AsyncMock(return_value=False),
+    )
+    repo = SimpleNamespace(
+        find_latest=AsyncMock(return_value=None),
+        setup_complete=AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(advice_service, "AdviceRepository", lambda _db: repo)
+    monkeypatch.setattr(advice_service, "expire_stale_advice", AsyncMock())
+
+    today = await advice_service.get_today_state(db, USER_ID)
+
+    assert today.state == "generating"
+    assert today.advice is None
+    repo.find_latest.assert_not_awaited()
+    statement = str(db.scalar.await_args.args[0])
+    assert "pg_try_advisory_xact_lock" in statement
 
 
 @pytest.mark.asyncio

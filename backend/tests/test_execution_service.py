@@ -333,6 +333,62 @@ async def test_same_idempotency_key_from_another_user_returns_conflict_without_l
 
 
 @pytest.mark.asyncio
+async def test_same_idempotency_key_on_another_item_returns_conflict_without_replay(
+    session_factory,
+):
+    async with session_factory() as db:
+        portfolio, advice, first_item = await seed_advice(db)
+        second_item = AdviceItem(
+            id=uuid4(),
+            advice_id=advice.id,
+            symbol="000002",
+            name="万科A",
+            industry="地产",
+            action="buy",
+            status="pending",
+            current_quantity=0,
+            target_quantity=100,
+            delta_quantity=100,
+            current_weight=Decimal("0"),
+            target_weight=Decimal("0.2"),
+            reference_price=Decimal("5"),
+            price_tolerance=Decimal("0.03"),
+            score=Decimal("0.7"),
+            rank=2,
+            confidence="normal",
+            positive_factors=[],
+            risks=[],
+            invalidation_conditions=[],
+            constraint_notes=[],
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        db.add(second_item)
+        await db.flush()
+        await execution_service.update_execution(
+            db, USER_ID, first_item.id, payload(), "cross-item-key", None
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            await execution_service.update_execution(
+                db,
+                USER_ID,
+                second_item.id,
+                payload(quantity=100, price=Decimal("5"), fee=Decimal("0")),
+                "cross-item-key",
+                None,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "idempotency_key_conflict"
+        assert second_item.status == "pending"
+        assert portfolio.cash == Decimal("995")
+        assert await count_rows(db, ExecutionRecord) == 1
+        assert await count_rows(db, ExecutionMutation) == 1
+        assert await count_rows(db, PortfolioEvent) == 1
+
+
+@pytest.mark.asyncio
 async def test_flush_race_409_rolls_back_request_transaction_without_partial_state(
     session_factory,
     monkeypatch,
@@ -879,6 +935,77 @@ async def test_later_symbol_event_blocks_correction_with_reconcile_conflict(sess
 
 
 @pytest.mark.asyncio
+async def test_later_reconciliation_blocks_correction_before_reversing_replaced_holdings(
+    session_factory,
+):
+    async with session_factory() as db:
+        portfolio, _advice, item = await seed_advice(db, cash=Decimal("3000"))
+        await execution_service.update_execution(
+            db, USER_ID, item.id, payload(fee=Decimal("0")), "reconcile-1", None
+        )
+        position = await db.scalar(
+            select(Position).where(
+                Position.portfolio_id == portfolio.id,
+                Position.symbol == item.symbol,
+            )
+        )
+        original_event = await db.scalar(
+            select(PortfolioEvent).where(PortfolioEvent.event_type == "advice_execution")
+        )
+        reconcile_time = original_event.created_at + timedelta(seconds=1)
+        position.quantity = 20
+        position.total_cost = Decimal("160")
+        portfolio.cash = Decimal("2500")
+        db.add(
+            PortfolioEvent(
+                id=uuid4(),
+                portfolio_id=portfolio.id,
+                symbol=None,
+                event_type="reconcile",
+                quantity_delta=0,
+                cash_delta=Decimal("500"),
+                source_type="manual",
+                source_id=None,
+                payload={
+                    "before": {"positions": []},
+                    "after": {
+                        "positions": [
+                            {
+                                "symbol": item.symbol,
+                                "quantity": 20,
+                                "average_cost": "8",
+                            }
+                        ]
+                    },
+                },
+                occurred_at=reconcile_time,
+                created_at=reconcile_time,
+                updated_at=reconcile_time,
+            )
+        )
+        await db.flush()
+        mutation_count = await count_rows(db, ExecutionMutation)
+        event_count = await count_rows(db, PortfolioEvent)
+
+        with pytest.raises(HTTPException) as exc:
+            await execution_service.update_execution(
+                db,
+                USER_ID,
+                item.id,
+                payload("skipped", expected_revision=1),
+                "reconcile-2",
+                None,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "later_symbol_event_requires_reconcile"
+        assert (position.quantity, position.total_cost) == (20, Decimal("160"))
+        assert portfolio.cash == Decimal("2500")
+        assert await count_rows(db, ExecutionMutation) == mutation_count
+        assert await count_rows(db, PortfolioEvent) == event_count
+
+
+@pytest.mark.asyncio
 async def test_advice_aggregate_status_tracks_all_item_states_and_appends_each_change(
     session_factory,
 ):
@@ -932,6 +1059,48 @@ async def test_advice_aggregate_status_tracks_all_item_states_and_appends_each_c
         assert await count_rows(db, ExecutionMutation) == 2
         assert await count_rows(db, PortfolioEvent) == 1
         assert await count_rows(db, PortfolioSnapshot) == 5
+
+
+@pytest.mark.asyncio
+async def test_advice_aggregate_ignores_pending_read_only_hold_items(session_factory):
+    async with session_factory() as db:
+        _portfolio, advice, actionable_item = await seed_advice(db)
+        hold_item = AdviceItem(
+            id=uuid4(),
+            advice_id=advice.id,
+            symbol="000002",
+            name="万科A",
+            industry="地产",
+            action="hold",
+            status="pending",
+            current_quantity=100,
+            target_quantity=100,
+            delta_quantity=0,
+            current_weight=Decimal("0.2"),
+            target_weight=Decimal("0.2"),
+            reference_price=Decimal("5"),
+            price_tolerance=Decimal("0.03"),
+            score=Decimal("0.7"),
+            rank=2,
+            confidence="normal",
+            positive_factors=[],
+            risks=[],
+            invalidation_conditions=[],
+            constraint_notes=[],
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        db.add(hold_item)
+        await db.flush()
+
+        response = await execution_service.update_execution(
+            db, USER_ID, actionable_item.id, payload("skipped"), "hold-aggregate", None
+        )
+
+        assert hold_item.status == "pending"
+        assert actionable_item.status == "skipped"
+        assert response.advice_state == "handled"
+        assert advice.status == "handled"
 
 
 @pytest.mark.asyncio

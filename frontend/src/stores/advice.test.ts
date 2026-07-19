@@ -348,4 +348,65 @@ describe('useAdviceStore', () => {
     expect(store.loading).toBe(false)
     expect(portfolioStore.loading).toBe(false)
   })
+
+  it('reuses an execution idempotency key for retries and rotates it for mutation changes', async () => {
+    const firstKey = '00000000-0000-4000-8000-000000000001'
+    const changedPayloadKey = '00000000-0000-4000-8000-000000000002'
+    const changedRevisionKey = '00000000-0000-4000-8000-000000000003'
+    const randomUUID = vi
+      .spyOn(crypto, 'randomUUID')
+      .mockReturnValueOnce(firstKey)
+      .mockReturnValueOnce(changedPayloadKey)
+      .mockReturnValueOnce(changedRevisionKey)
+    vi.mocked(adviceApi.updateExecution).mockRejectedValue(new Error('响应丢失'))
+    const store = useAdviceStore()
+    const payload = {
+      disposition: 'executed' as const,
+      quantity: 100,
+      price: '10.1001',
+      fee: '5.0001',
+      executed_at: '2026-07-19T09:35:00+08:00',
+      reason: '',
+      expected_revision: 0,
+      acknowledge_outside_advice: false,
+    }
+
+    await expect(store.updateExecution('item-1', payload)).rejects.toThrow('响应丢失')
+    await expect(store.updateExecution('item-1', { ...payload })).rejects.toThrow('响应丢失')
+    await expect(store.updateExecution('item-1', {
+      ...payload,
+      price: '10.2001',
+    })).rejects.toThrow('响应丢失')
+    await expect(store.updateExecution('item-1', {
+      ...payload,
+      price: '10.2001',
+      expected_revision: 1,
+    })).rejects.toThrow('响应丢失')
+
+    expect(randomUUID).toHaveBeenCalledTimes(3)
+    expect(adviceApi.updateExecution).toHaveBeenNthCalledWith(
+      1,
+      'item-1',
+      payload,
+      firstKey,
+    )
+    expect(adviceApi.updateExecution).toHaveBeenNthCalledWith(
+      2,
+      'item-1',
+      { ...payload },
+      firstKey,
+    )
+    expect(adviceApi.updateExecution).toHaveBeenNthCalledWith(
+      3,
+      'item-1',
+      { ...payload, price: '10.2001' },
+      changedPayloadKey,
+    )
+    expect(adviceApi.updateExecution).toHaveBeenNthCalledWith(
+      4,
+      'item-1',
+      { ...payload, price: '10.2001', expected_revision: 1 },
+      changedRevisionKey,
+    )
+  })
 })

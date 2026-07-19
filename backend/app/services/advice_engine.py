@@ -101,8 +101,8 @@ def _validate_inputs(
     candidates: tuple[EngineCandidate, ...],
     estimated_cost_rate: Decimal,
 ) -> None:
-    if cash <= ZERO:
-        raise ValueError("cash must be positive")
+    if cash < ZERO:
+        raise ValueError("cash must not be negative")
     if estimated_cost_rate < ZERO:
         raise ValueError("estimated cost rate must not be negative")
 
@@ -516,6 +516,8 @@ def build_advice(
         (position_by_symbol[symbol].market_value for symbol in sorted(position_by_symbol)),
         ZERO,
     )
+    if total_asset <= ZERO:
+        raise ValueError("total asset must be positive")
     current_weights = {
         position.symbol: position.market_value / total_asset for position in positions
     }

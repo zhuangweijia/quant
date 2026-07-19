@@ -55,6 +55,20 @@ def test_skipped_execution_rejects_trade_fields():
         ExecutionUpdateRequest(disposition="skipped", fee=Decimal("0.01"), expected_revision=0)
 
 
+def test_skipped_execution_requires_a_nonblank_reason():
+    with pytest.raises(ValidationError, match="原因"):
+        ExecutionUpdateRequest(disposition="skipped", expected_revision=0)
+    with pytest.raises(ValidationError, match="原因"):
+        ExecutionUpdateRequest(
+            disposition="skipped", reason=" \t\r\n", expected_revision=0
+        )
+
+    request = ExecutionUpdateRequest(
+        disposition="skipped", reason="临时资金安排", expected_revision=0
+    )
+    assert request.reason == "临时资金安排"
+
+
 def test_profile_accepts_boundaries_and_rejects_extra_fields():
     profile = InvestmentProfileInput(
         investment_horizon_days=20,
@@ -138,6 +152,35 @@ def test_money_decimal_serializes_as_an_exact_json_string():
     )
     assert setup.total_capital == Decimal("10000000000000.0001")
     assert '"total_capital":"10000000000000.0001"' in setup.model_dump_json()
+
+
+def test_money_fields_reject_values_outside_numeric_20_4():
+    occurred_at = "2026-07-19T09:00:00+08:00"
+
+    with pytest.raises(ValidationError):
+        CashMovementRequest(
+            kind="deposit", amount=Decimal("0.00001"), occurred_at=occurred_at
+        )
+    with pytest.raises(ValidationError):
+        PortfolioSetupRequest(
+            profile=balanced_profile(),
+            total_capital=Decimal("10000000000000000.0000"),
+            cash=Decimal("0"),
+        )
+    with pytest.raises(ValidationError):
+        HoldingsReconcileRequest(
+            expected_updated_at=occurred_at,
+            cash=Decimal("1.00001"),
+            positions=[],
+        )
+    with pytest.raises(ValidationError):
+        ExecutionUpdateRequest(
+            disposition="executed",
+            quantity=1,
+            price=Decimal("10.00001"),
+            executed_at=occurred_at,
+            expected_revision=0,
+        )
 
 
 def test_money_fields_require_quoted_decimal_json_tokens():

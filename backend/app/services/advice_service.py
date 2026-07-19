@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -8,7 +9,7 @@ from typing import Any
 
 import structlog
 from fastapi import HTTPException
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import event_bus
@@ -43,6 +44,9 @@ MAX_RETURN_SESSIONS = 120
 UNRESOLVED_STATUSES = {"generating", "ready", "partially_handled"}
 SUCCESS_STATUSES = {"ready", "partially_handled", "handled", "expired"}
 MISSING_HELD_QUOTE_WARNING = "缺少信号日收盘价，失败快照按录入平均成本估值"
+_GENERATION_LOCK_SCOPE = "portfolio_advice"
+_POSTGRES_LOCK_GENERATION = text("SELECT pg_advisory_xact_lock(:lock_key)")
+_POSTGRES_TRY_LOCK_GENERATION = text("SELECT pg_try_advisory_xact_lock(:lock_key)")
 
 ERROR_MESSAGES = {
     "candidate_market_data_missing": "候选股票行情数据不完整",
@@ -79,6 +83,40 @@ class AdviceInputs:
 
 def _failure_detail(code: str) -> dict[str, str]:
     return {"code": code, "message": ERROR_MESSAGES[code]}
+
+
+def _generation_lock_key(user_id: Any) -> int:
+    digest = hashlib.blake2b(
+        f"{_GENERATION_LOCK_SCOPE}:{user_id}".encode(), digest_size=8
+    ).digest()
+    return int.from_bytes(digest, byteorder="big", signed=True)
+
+
+def _database_dialect_name(db: AsyncSession) -> str | None:
+    get_bind = getattr(db, "get_bind", None)
+    if get_bind is None:
+        return None
+    bind = get_bind()
+    return getattr(getattr(bind, "dialect", None), "name", None)
+
+
+async def _acquire_generation_lock(db: AsyncSession, user_id: Any) -> None:
+    if _database_dialect_name(db) != "postgresql":
+        return
+    await db.execute(
+        _POSTGRES_LOCK_GENERATION,
+        {"lock_key": _generation_lock_key(user_id)},
+    )
+
+
+async def _generation_in_progress(db: AsyncSession, user_id: Any) -> bool:
+    if _database_dialect_name(db) != "postgresql":
+        return False
+    acquired = await db.scalar(
+        _POSTGRES_TRY_LOCK_GENERATION,
+        {"lock_key": _generation_lock_key(user_id)},
+    )
+    return acquired is False
 
 
 def _common_returns(
@@ -184,6 +222,15 @@ class AdviceRepository:
         return result.scalars().all()
 
     async def load_inputs(self, user_id: Any, signal_date: date) -> AdviceInputs | None:
+        portfolio_result = await self.db.execute(
+            select(Portfolio)
+            .where(Portfolio.user_id == user_id)
+            .with_for_update()
+        )
+        portfolio = portfolio_result.scalar_one_or_none()
+        if portfolio is None:
+            return None
+
         profile_result = await self.db.execute(
             select(InvestmentProfile)
             .where(
@@ -191,19 +238,17 @@ class AdviceRepository:
                 InvestmentProfile.is_active.is_(True),
             )
             .order_by(InvestmentProfile.version.desc())
+            .with_for_update()
         )
         profile = profile_result.scalar_one_or_none()
-        portfolio_result = await self.db.execute(
-            select(Portfolio).where(Portfolio.user_id == user_id)
-        )
-        portfolio = portfolio_result.scalar_one_or_none()
-        if profile is None or portfolio is None:
+        if profile is None:
             return None
 
         positions_result = await self.db.execute(
             select(Position)
             .where(Position.portfolio_id == portfolio.id)
             .order_by(Position.symbol)
+            .with_for_update()
         )
         positions = tuple(positions_result.scalars().all())
         predictions_result = await self.db.execute(
@@ -641,6 +686,7 @@ async def generate_for_user(
     signal_date: date,
     force: bool = False,
 ) -> DailyAdvice:
+    await _acquire_generation_lock(db, user_id)
     repo = AdviceRepository(db)
     existing = await repo.find_current(user_id, signal_date)
     if existing is not None and not force:
@@ -742,6 +788,8 @@ async def get_advice_response(
 
 async def get_today_state(db: AsyncSession, user_id: Any) -> AdviceTodayResponse:
     await expire_stale_advice(db, user_id)
+    if await _generation_in_progress(db, user_id):
+        return AdviceTodayResponse(state="generating")
     repo = AdviceRepository(db)
     advice = await repo.find_latest(user_id)
     if advice is None:

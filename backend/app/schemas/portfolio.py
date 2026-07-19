@@ -4,6 +4,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
+    AfterValidator,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -27,9 +28,18 @@ def require_decimal_string(value: object) -> Decimal | str:
     raise ValueError("金额必须使用十进制字符串")
 
 
+def require_numeric_20_4(value: Decimal) -> Decimal:
+    maximum = Decimal("9999999999999999.9999")
+    if abs(value) > maximum:
+        raise ValueError("金额超出 NUMERIC(20,4) 可表示范围")
+    return value
+
+
 MonetaryDecimal = Annotated[
     Decimal,
     BeforeValidator(require_decimal_string),
+    Field(max_digits=20, decimal_places=4),
+    AfterValidator(require_numeric_20_4),
     PlainSerializer(str, return_type=str, when_used="json"),
 ]
 RatioDecimal = Annotated[
