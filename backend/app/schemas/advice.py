@@ -7,6 +7,7 @@ from pydantic import Field, model_validator
 
 from app.schemas.portfolio import (
     MonetaryDecimal,
+    MonetaryInputDecimal,
     RatioDecimal,
     ResponseModel,
     StrictModel,
@@ -98,8 +99,8 @@ class AdviceTodayResponse(ResponseModel):
 class ExecutionUpdateRequest(StrictModel):
     disposition: Literal["executed", "partial", "skipped"]
     quantity: int = Field(default=0, ge=0)
-    price: MonetaryDecimal | None = Field(default=None, gt=0)
-    fee: MonetaryDecimal = Field(default=Decimal("0"), ge=0)
+    price: MonetaryInputDecimal | None = Field(default=None, gt=0)
+    fee: MonetaryInputDecimal = Field(default=Decimal("0"), ge=0)
     executed_at: datetime | None = None
     reason: str = Field(default="", max_length=512)
     expected_revision: int = Field(ge=0)

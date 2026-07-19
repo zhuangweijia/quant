@@ -85,6 +85,20 @@ def _failure_detail(code: str) -> dict[str, str]:
     return {"code": code, "message": ERROR_MESSAGES[code]}
 
 
+def _advice_response_status(current_status: str, items: list[Any]) -> str:
+    if current_status not in {"ready", "partially_handled", "handled"}:
+        return current_status
+    actionable_statuses = [item.status for item in items if item.action != "hold"]
+    if not actionable_statuses:
+        return "handled"
+    handled = {"executed", "skipped", "expired"}
+    if all(status in handled for status in actionable_statuses):
+        return "handled"
+    if any(status != "pending" for status in actionable_statuses):
+        return "partially_handled"
+    return "ready"
+
+
 def _generation_lock_key(user_id: Any) -> int:
     digest = hashlib.blake2b(
         f"{_GENERATION_LOCK_SCOPE}:{user_id}".encode(), digest_size=8
@@ -398,6 +412,7 @@ class AdviceRepository:
                 DailyAdvice.signal_date < signal_date,
                 DailyAdvice.status.in_(("ready", "partially_handled")),
                 AdviceItem.status == "pending",
+                AdviceItem.action != "hold",
             )
         )
         return bool(pending)
@@ -593,16 +608,11 @@ class AdviceRepository:
                 .order_by(AdviceItem.created_at, AdviceItem.symbol)
             )
         ).all()
-        item_statuses = [item.status for item, _execution in rows]
-        response_status = advice.status
-        if advice.status in {"ready", "partially_handled", "handled"} and item_statuses:
-            handled = {"executed", "skipped", "expired"}
-            if all(status in handled for status in item_statuses):
-                response_status = "handled"
-            elif any(status != "pending" for status in item_statuses):
-                response_status = "partially_handled"
-            else:
-                response_status = "ready"
+        response_status = _advice_response_status(
+            advice.status,
+            [item for item, _execution in rows],
+        )
+        if response_status != advice.status:
             advice.status = response_status
         snapshot_by_symbol = {
             position["symbol"]: position for position in (snapshot.positions if snapshot else [])
@@ -787,9 +797,9 @@ async def get_advice_response(
 
 
 async def get_today_state(db: AsyncSession, user_id: Any) -> AdviceTodayResponse:
-    await expire_stale_advice(db, user_id)
     if await _generation_in_progress(db, user_id):
         return AdviceTodayResponse(state="generating")
+    await expire_stale_advice(db, user_id)
     repo = AdviceRepository(db)
     advice = await repo.find_latest(user_id)
     if advice is None:

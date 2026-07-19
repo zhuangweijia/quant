@@ -38,6 +38,11 @@ def require_numeric_20_4(value: Decimal) -> Decimal:
 MonetaryDecimal = Annotated[
     Decimal,
     BeforeValidator(require_decimal_string),
+    PlainSerializer(str, return_type=str, when_used="json"),
+]
+MonetaryInputDecimal = Annotated[
+    Decimal,
+    BeforeValidator(require_decimal_string),
     Field(max_digits=20, decimal_places=4),
     AfterValidator(require_numeric_20_4),
     PlainSerializer(str, return_type=str, when_used="json"),
@@ -81,13 +86,13 @@ class InvestmentProfileInput(StrictModel):
 class PositionInput(StrictModel):
     symbol: str = Field(pattern=r"^\d{6}$")
     quantity: int = Field(ge=0)
-    average_cost: MonetaryDecimal = Field(gt=0)
+    average_cost: MonetaryInputDecimal = Field(gt=0)
 
 
 class PortfolioSetupRequest(StrictModel):
     profile: InvestmentProfileInput
-    total_capital: MonetaryDecimal = Field(gt=0)
-    cash: MonetaryDecimal = Field(ge=0)
+    total_capital: MonetaryInputDecimal = Field(gt=0)
+    cash: MonetaryInputDecimal = Field(ge=0)
     positions: list[PositionInput] = Field(default_factory=list, max_length=300)
 
     @model_validator(mode="after")
@@ -162,7 +167,7 @@ class PortfolioSummaryResponse(ResponseModel):
 
 class HoldingsReconcileRequest(StrictModel):
     expected_updated_at: datetime
-    cash: MonetaryDecimal = Field(ge=0)
+    cash: MonetaryInputDecimal = Field(ge=0)
     positions: list[PositionInput] = Field(default_factory=list, max_length=300)
 
     @model_validator(mode="after")
@@ -176,7 +181,7 @@ class HoldingsReconcileRequest(StrictModel):
 
 class CashMovementRequest(StrictModel):
     kind: Literal["deposit", "withdrawal", "fee"]
-    amount: MonetaryDecimal = Field(gt=0)
+    amount: MonetaryInputDecimal = Field(gt=0)
     occurred_at: datetime
     note: str = Field(default="", max_length=256)
 

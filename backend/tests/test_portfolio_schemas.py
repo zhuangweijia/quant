@@ -3,13 +3,14 @@ from datetime import datetime, tzinfo
 from decimal import Decimal
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from app.schemas.advice import AdviceTodayResponse, DailyAdviceResponse, ExecutionUpdateRequest
 from app.schemas.portfolio import (
     CashMovementRequest,
     HoldingsReconcileRequest,
     InvestmentProfileInput,
+    MonetaryDecimal,
     PortfolioSetupRequest,
     PortfolioSetupStatus,
     PositionInput,
@@ -152,6 +153,12 @@ def test_money_decimal_serializes_as_an_exact_json_string():
     )
     assert setup.total_capital == Decimal("10000000000000.0001")
     assert '"total_capital":"10000000000000.0001"' in setup.model_dump_json()
+
+
+def test_derived_money_response_values_may_keep_more_than_four_decimal_places():
+    derived = TypeAdapter(MonetaryDecimal).validate_python(Decimal("3.33333333"))
+
+    assert derived == Decimal("3.33333333")
 
 
 def test_money_fields_reject_values_outside_numeric_20_4():

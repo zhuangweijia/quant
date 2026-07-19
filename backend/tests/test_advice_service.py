@@ -399,6 +399,31 @@ async def test_repository_rejects_mixed_prediction_model_versions():
 
 
 @pytest.mark.asyncio
+async def test_stale_holdings_query_ignores_read_only_hold_items():
+    db = SimpleNamespace(scalar=AsyncMock(return_value=0))
+
+    stale = await advice_service.AdviceRepository(db).holdings_are_stale(
+        USER_ID, SIGNAL_DATE
+    )
+
+    assert stale is False
+    statement = db.scalar.await_args.args[0]
+    assert "advice_items.action !=" in str(statement)
+    assert "hold" in statement.compile().params.values()
+
+
+def test_response_status_ignores_read_only_hold_items():
+    actionable = SimpleNamespace(action="buy", status="skipped")
+    hold = SimpleNamespace(action="hold", status="pending")
+
+    assert (
+        advice_service._advice_response_status("handled", [actionable, hold])
+        == "handled"
+    )
+    assert advice_service._advice_response_status("ready", [hold]) == "handled"
+
+
+@pytest.mark.asyncio
 async def test_generation_lock_is_acquired_before_existing_advice_is_read(monkeypatch):
     events = []
     existing = SimpleNamespace(id="advice-1", status="ready")
@@ -430,12 +455,14 @@ async def test_today_returns_generating_while_user_generation_lock_is_held(monke
         setup_complete=AsyncMock(return_value=True),
     )
     monkeypatch.setattr(advice_service, "AdviceRepository", lambda _db: repo)
-    monkeypatch.setattr(advice_service, "expire_stale_advice", AsyncMock())
+    expire = AsyncMock()
+    monkeypatch.setattr(advice_service, "expire_stale_advice", expire)
 
     today = await advice_service.get_today_state(db, USER_ID)
 
     assert today.state == "generating"
     assert today.advice is None
+    expire.assert_not_awaited()
     repo.find_latest.assert_not_awaited()
     statement = str(db.scalar.await_args.args[0])
     assert "pg_try_advisory_xact_lock" in statement
