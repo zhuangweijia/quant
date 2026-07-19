@@ -346,6 +346,67 @@ def _cash_after_trades(
     return cash + trade_cash_flow - estimated_cost_rate * traded_value
 
 
+def _repair_post_rounding_caps(
+    profile: EngineProfile,
+    total_asset: Decimal,
+    current_quantities: dict[str, int],
+    target_quantities: dict[str, int],
+    prices: dict[str, Decimal],
+    industries: dict[str, str | None],
+    candidates: dict[str, EngineCandidate],
+    adjusted_scores: dict[str, Decimal],
+) -> tuple[dict[str, int], set[str]]:
+    quantities = dict(target_quantities)
+    reduced_for_cap: set[str] = set()
+
+    maximum_stock_value = total_asset * profile.max_stock_weight
+    for symbol in sorted(quantities):
+        while (
+            quantities[symbol] - current_quantities.get(symbol, 0) >= LOT_SIZE
+            and Decimal(quantities[symbol]) * prices[symbol] > maximum_stock_value
+        ):
+            quantities[symbol] -= LOT_SIZE
+            reduced_for_cap.add(symbol)
+
+    maximum_industry_value = total_asset * profile.max_industry_weight
+    industry_order = sorted(
+        set(industries.values()),
+        key=lambda value: "unknown" if value is None else value,
+    )
+    for industry in industry_order:
+        while (
+            sum(
+                (
+                    Decimal(quantities[symbol]) * prices[symbol]
+                    for symbol in sorted(quantities)
+                    if industries[symbol] == industry
+                ),
+                ZERO,
+            )
+            > maximum_industry_value
+        ):
+            eligible = sorted(
+                (
+                    symbol
+                    for symbol in quantities
+                    if industries[symbol] == industry
+                    and quantities[symbol] - current_quantities.get(symbol, 0) >= LOT_SIZE
+                ),
+                key=lambda symbol: (
+                    adjusted_scores.get(symbol, ZERO),
+                    -candidates[symbol].rank,
+                    symbol,
+                ),
+            )
+            if not eligible:
+                break
+            symbol = eligible[0]
+            quantities[symbol] -= LOT_SIZE
+            reduced_for_cap.add(symbol)
+
+    return quantities, reduced_for_cap
+
+
 def _reserve_costs(
     cash: Decimal,
     minimum_cash: Decimal,
@@ -481,8 +542,26 @@ def build_advice(
     }
     # Input validation guarantees held prices are present.
     concrete_prices = {symbol: price for symbol, price in prices.items() if price is not None}
+    industries = {
+        symbol: (
+            candidate_by_symbol[symbol].industry
+            if symbol in candidate_by_symbol
+            else position_by_symbol[symbol].industry
+        )
+        for symbol in all_symbols
+    }
     targets = _target_quantities(
         total_asset, blended_weights, current_quantities, concrete_prices
+    )
+    targets, reduced_for_cap = _repair_post_rounding_caps(
+        profile,
+        total_asset,
+        current_quantities,
+        targets,
+        concrete_prices,
+        industries,
+        candidate_by_symbol,
+        adjusted_scores,
     )
     targets, estimated_cash, reduced_for_cost = _reserve_costs(
         cash,
@@ -497,14 +576,6 @@ def build_advice(
 
     target_weights = {
         symbol: Decimal(targets[symbol]) * concrete_prices[symbol] / total_asset
-        for symbol in all_symbols
-    }
-    industries = {
-        symbol: (
-            candidate_by_symbol[symbol].industry
-            if symbol in candidate_by_symbol
-            else position_by_symbol[symbol].industry
-        )
         for symbol in all_symbols
     }
     (
@@ -532,6 +603,8 @@ def build_advice(
             notes.append("不在当日候选范围")
         if symbol in reduced_for_cost:
             notes.append("为预留交易成本下调买入数量")
+        if symbol in reduced_for_cap:
+            notes.append("为修复整手取整后的集中度下调买入数量")
         if cash_below_minimum and (current_quantity > 0 or target_quantity > 0):
             notes.append("受单日换手率或A股整手交易限制，预计现金仍低于最低现金要求")
         if symbol in stock_exceeded:

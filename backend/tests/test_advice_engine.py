@@ -430,6 +430,75 @@ def test_none_industries_share_the_unknown_violation_bucket():
     )
 
 
+def test_post_rounding_repair_removes_avoidable_industry_cap_breach():
+    profile = EngineProfile(
+        max_drawdown=Decimal("1"),
+        max_stock_weight=Decimal("0.20"),
+        max_industry_weight=Decimal("0.20"),
+        min_cash_ratio=Decimal("0"),
+        max_daily_turnover=Decimal("1"),
+        price_tolerance=Decimal("0.03"),
+    )
+    held = EnginePosition("000001", "A", "X", 200, Decimal("100"), Decimal("20000"))
+    candidates = (
+        candidate("000001", "X", "1", price="100", rank=1),
+        candidate("000002", "X", "199", price="1", rank=2),
+    )
+
+    result = build_advice(profile, Decimal("80000"), (held,), candidates, Decimal("0"))
+
+    by_symbol = {line.symbol: line for line in result.lines}
+    assert by_symbol["000001"].target_quantity == 100
+    assert by_symbol["000002"].target_quantity == 10000
+    assert sum(line.target_weight for line in result.lines if line.industry == "X") <= Decimal(
+        "0.20"
+    )
+    assert "industry_cap_exceeded:X" not in result.constraint_violations
+
+
+def test_post_rounding_repairs_multiple_industries_stably_without_new_breaches():
+    profile = EngineProfile(
+        max_drawdown=Decimal("1"),
+        max_stock_weight=Decimal("0.20"),
+        max_industry_weight=Decimal("0.25"),
+        min_cash_ratio=Decimal("0.10"),
+        max_daily_turnover=Decimal("1"),
+        price_tolerance=Decimal("0.03"),
+    )
+    positions = (
+        EnginePosition("000001", "A", "X", 200, Decimal("100"), Decimal("20000")),
+        EnginePosition("000003", "C", "Y", 200, Decimal("100"), Decimal("20000")),
+    )
+    candidates = (
+        candidate("000001", "X", "1", price="100", rank=1),
+        candidate("000002", "X", "199", price="1", rank=2),
+        candidate("000003", "Y", "1", price="100", rank=1),
+        candidate("000004", "Y", "199", price="1", rank=2),
+    )
+
+    forward = build_advice(profile, Decimal("60000"), positions, candidates, Decimal("0"))
+    reverse = build_advice(
+        profile,
+        Decimal("60000"),
+        tuple(reversed(positions)),
+        tuple(reversed(candidates)),
+        Decimal("0"),
+    )
+
+    assert forward == reverse
+    by_symbol = {line.symbol: line.target_quantity for line in forward.lines}
+    assert by_symbol == {"000001": 100, "000002": 15000, "000003": 100, "000004": 15000}
+    assert all(line.target_weight <= profile.max_stock_weight for line in forward.lines)
+    assert all(
+        sum(line.target_weight for line in forward.lines if line.industry == industry)
+        <= profile.max_industry_weight
+        for industry in ("X", "Y")
+    )
+    assert forward.estimated_cash >= forward.total_asset * profile.min_cash_ratio
+    assert forward.turnover <= profile.max_daily_turnover
+    assert forward.constraint_violations == ()
+
+
 def test_engine_rejects_position_market_value_mismatch():
     inconsistent = EnginePosition(
         "000001", "平安银行", "银行", 100, Decimal("10"), Decimal("999")
