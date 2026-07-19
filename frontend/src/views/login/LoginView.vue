@@ -68,7 +68,7 @@ const onSubmit = handleSubmit(async (values) => {
       setValues({ username: '', password: '', confirm_password: '' })
     } else {
       await authStore.login({ username: values.username, password: values.password })
-      const redirect = (route.query.redirect as string) || '/'
+      const redirect = (route.query.redirect as string) || '/today'
       router.push(redirect)
     }
   } catch (e: any) {
