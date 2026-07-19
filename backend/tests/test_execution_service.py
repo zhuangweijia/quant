@@ -6,9 +6,11 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
 
+from app import database
 from app.models.advice import AdviceItem, DailyAdvice
 from app.models.audit_log import AuditLog
 from app.models.daily_bar import DailyBar
@@ -179,12 +181,63 @@ async def count_rows(db, model):
     return int(await db.scalar(select(func.count()).select_from(model)) or 0)
 
 
+async def run_get_db_request(operation):
+    generator = database.get_db()
+    db = await anext(generator)
+    try:
+        result = await operation(db)
+    except BaseException as error:
+        try:
+            await generator.athrow(error)
+        except BaseException as reraised:
+            raise reraised
+        raise AssertionError("get_db swallowed the request exception")
+    with pytest.raises(StopAsyncIteration):
+        await anext(generator)
+    return result
+
+
 def test_owner_lock_sql_scopes_user_and_uses_for_update():
     statement = execution_service._owned_item_lock_statement(USER_ID, uuid4())
     sql = str(statement.compile(dialect=postgresql.dialect()))
 
     assert "daily_advices.user_id" in sql
     assert "FOR UPDATE OF daily_advices" in sql
+
+
+@pytest.mark.parametrize("code_attribute", ["sqlstate", "pgcode"])
+def test_asyncpg_wrapped_target_unique_violation_is_mapped_by_exact_constraint(
+    code_attribute,
+):
+    driver = Exception(
+        'duplicate key value violates unique constraint "uq_execution_mutation_key"'
+    )
+    middle = Exception("asyncpg driver wrapper")
+    middle.__context__ = driver
+    outer = Exception("SQLAlchemy asyncpg adapter wrapper")
+    setattr(outer, code_attribute, "23505")
+    outer.__cause__ = middle
+    error = IntegrityError("insert", {}, outer)
+
+    assert execution_service._is_idempotency_conflict(error) is True
+
+
+@pytest.mark.parametrize(
+    ("code", "constraint"),
+    [
+        ("23505", "uq_execution_item"),
+        ("23503", "uq_execution_mutation_key"),
+    ],
+)
+def test_other_postgres_integrity_errors_are_not_mapped_to_idempotency_conflict(
+    code,
+    constraint,
+):
+    wrapped = Exception(f'duplicate key value violates unique constraint "{constraint}"')
+    wrapped.sqlstate = code
+    error = IntegrityError("insert", {}, wrapped)
+
+    assert execution_service._is_idempotency_conflict(error) is False
 
 
 @pytest.mark.asyncio
@@ -239,6 +292,65 @@ async def test_same_idempotency_key_from_another_user_returns_conflict_without_l
         assert second_portfolio.cash == Decimal("2000")
         assert await count_rows(db, ExecutionMutation) == 1
         assert await count_rows(db, PortfolioEvent) == 1
+
+
+@pytest.mark.asyncio
+async def test_flush_race_409_rolls_back_request_transaction_without_partial_state(
+    session_factory,
+    monkeypatch,
+):
+    async with session_factory() as setup_db:
+        portfolio, advice, item = await seed_advice(setup_db)
+        portfolio_id = portfolio.id
+        advice_id = advice.id
+        item_id = item.id
+        await setup_db.commit()
+
+    original_log_action = execution_service.log_action
+
+    async def flush_with_duplicate_mutation(db, **kwargs):
+        pending = next(entity for entity in db.new if isinstance(entity, ExecutionMutation))
+        db.add(
+            ExecutionMutation(
+                id=uuid4(),
+                execution_id=pending.execution_id,
+                idempotency_key=pending.idempotency_key,
+                revision=pending.revision + 1,
+                before_state=pending.before_state,
+                after_state=pending.after_state,
+                portfolio_event_ids=pending.portfolio_event_ids,
+                created_at=pending.created_at,
+                updated_at=pending.updated_at,
+            )
+        )
+        await original_log_action(db, **kwargs)
+
+    monkeypatch.setattr(database, "AsyncSessionLocal", session_factory)
+    monkeypatch.setattr(execution_service, "log_action", flush_with_duplicate_mutation)
+
+    async def request(db):
+        return await execution_service.update_execution(
+            db, USER_ID, item_id, payload(), "flush-race-key", None
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        await run_get_db_request(request)
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "idempotency_key_conflict"
+
+    async with session_factory() as verification_db:
+        stored_portfolio = await verification_db.get(Portfolio, portfolio_id)
+        stored_advice = await verification_db.get(DailyAdvice, advice_id)
+        stored_item = await verification_db.get(AdviceItem, item_id)
+        assert stored_portfolio.cash == Decimal("2000")
+        assert stored_advice.status == "ready"
+        assert stored_item.status == "pending"
+        assert await count_rows(verification_db, Position) == 0
+        assert await count_rows(verification_db, ExecutionRecord) == 0
+        assert await count_rows(verification_db, ExecutionMutation) == 0
+        assert await count_rows(verification_db, PortfolioEvent) == 0
+        assert await count_rows(verification_db, AuditLog) == 0
+        assert await count_rows(verification_db, PortfolioSnapshot) == 1
 
 
 @pytest.mark.asyncio
@@ -560,6 +672,125 @@ async def test_correction_after_skipped_does_not_reverse_an_already_reversed_eve
         assert (position.quantity, position.total_cost) == (100, Decimal("1000"))
         assert len(events) == 3
         assert sum(event.reversal_of_id is not None for event in events) == 1
+
+
+@pytest.mark.asyncio
+async def test_initial_skipped_then_same_timestamp_external_event_blocks_execution(
+    session_factory,
+):
+    async with session_factory() as db:
+        portfolio, _advice, item = await seed_advice(db)
+        await execution_service.update_execution(
+            db, USER_ID, item.id, payload("skipped"), "initial-skip-1", None
+        )
+        record = await db.scalar(
+            select(ExecutionRecord).where(ExecutionRecord.advice_item_id == item.id)
+        )
+        db.add(
+            PortfolioEvent(
+                id=uuid4(),
+                portfolio_id=portfolio.id,
+                symbol=item.symbol,
+                event_type="manual_adjustment",
+                quantity_delta=0,
+                cash_delta=Decimal("0"),
+                source_type="manual",
+                source_id=None,
+                payload=None,
+                occurred_at=record.updated_at,
+                created_at=record.updated_at,
+                updated_at=record.updated_at,
+            )
+        )
+        await db.flush()
+        mutation_count = await count_rows(db, ExecutionMutation)
+        event_count = await count_rows(db, PortfolioEvent)
+        snapshot_count = await count_rows(db, PortfolioSnapshot)
+        audit_count = await count_rows(db, AuditLog)
+
+        with pytest.raises(HTTPException) as exc:
+            await execution_service.update_execution(
+                db,
+                USER_ID,
+                item.id,
+                payload(expected_revision=1),
+                "initial-skip-2",
+                None,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "later_symbol_event_requires_reconcile"
+        assert portfolio.cash == Decimal("2000")
+        assert await count_rows(db, Position) == 0
+        assert await count_rows(db, ExecutionMutation) == mutation_count
+        assert await count_rows(db, PortfolioEvent) == event_count
+        assert await count_rows(db, PortfolioSnapshot) == snapshot_count
+        assert await count_rows(db, AuditLog) == audit_count
+
+
+@pytest.mark.asyncio
+async def test_executed_then_skipped_external_event_blocks_reexecution(session_factory):
+    async with session_factory() as db:
+        portfolio, _advice, item = await seed_advice(db, cash=Decimal("3000"))
+        await execution_service.update_execution(
+            db, USER_ID, item.id, payload(fee=Decimal("0")), "skip-external-1", None
+        )
+        await execution_service.update_execution(
+            db,
+            USER_ID,
+            item.id,
+            payload("skipped", expected_revision=1),
+            "skip-external-2",
+            None,
+        )
+        record = await db.scalar(
+            select(ExecutionRecord).where(ExecutionRecord.advice_item_id == item.id)
+        )
+        assert (
+            await execution_service.ExecutionRepository(db).current_execution_event(record.id)
+            is None
+        )
+        external_time = record.updated_at + timedelta(seconds=1)
+        db.add(
+            PortfolioEvent(
+                id=uuid4(),
+                portfolio_id=portfolio.id,
+                symbol=item.symbol,
+                event_type="manual_adjustment",
+                quantity_delta=0,
+                cash_delta=Decimal("0"),
+                source_type="manual",
+                source_id=None,
+                payload=None,
+                occurred_at=external_time,
+                created_at=external_time,
+                updated_at=external_time,
+            )
+        )
+        await db.flush()
+        mutation_count = await count_rows(db, ExecutionMutation)
+        event_count = await count_rows(db, PortfolioEvent)
+        snapshot_count = await count_rows(db, PortfolioSnapshot)
+        audit_count = await count_rows(db, AuditLog)
+
+        with pytest.raises(HTTPException) as exc:
+            await execution_service.update_execution(
+                db,
+                USER_ID,
+                item.id,
+                payload(fee=Decimal("0"), expected_revision=2),
+                "skip-external-3",
+                None,
+            )
+
+        assert exc.value.status_code == 409
+        assert exc.value.detail["code"] == "later_symbol_event_requires_reconcile"
+        assert portfolio.cash == Decimal("3000")
+        assert await count_rows(db, Position) == 0
+        assert await count_rows(db, ExecutionMutation) == mutation_count
+        assert await count_rows(db, PortfolioEvent) == event_count
+        assert await count_rows(db, PortfolioSnapshot) == snapshot_count
+        assert await count_rows(db, AuditLog) == audit_count
 
 
 @pytest.mark.asyncio

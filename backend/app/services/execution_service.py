@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -7,7 +8,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
-from sqlalchemy import exists, func, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
@@ -164,12 +165,25 @@ class ExecutionRepository:
         )
         return result.scalars().first()
 
-    async def has_later_symbol_event(self, event: PortfolioEvent) -> bool:
+    async def has_later_symbol_event(
+        self,
+        *,
+        portfolio_id: Any,
+        symbol: str,
+        anchor: datetime,
+        execution_id: Any,
+    ) -> bool:
         count = await self.db.scalar(
             select(func.count(PortfolioEvent.id)).where(
-                PortfolioEvent.portfolio_id == event.portfolio_id,
-                PortfolioEvent.symbol == event.symbol,
-                PortfolioEvent.created_at > event.created_at,
+                PortfolioEvent.portfolio_id == portfolio_id,
+                PortfolioEvent.symbol == symbol,
+                PortfolioEvent.created_at >= anchor,
+                or_(
+                    PortfolioEvent.source_type.is_(None),
+                    PortfolioEvent.source_type != "advice_execution",
+                    PortfolioEvent.source_id.is_(None),
+                    PortfolioEvent.source_id != str(execution_id),
+                ),
             )
         )
         return bool(count)
@@ -385,11 +399,43 @@ def _aggregate_advice_status(advice: DailyAdvice, items: list[AdviceItem]) -> st
 
 
 def _is_idempotency_conflict(error: IntegrityError) -> bool:
-    constraint = getattr(getattr(error.orig, "diag", None), "constraint_name", None)
-    if constraint == "uq_execution_mutation_key":
-        return True
-    message = str(error.orig).lower()
-    return "execution_mutations.idempotency_key" in message and "unique" in message
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    sqlstates: set[str] = set()
+    target_constraint = False
+    sqlite_target = False
+    constraint_pattern = re.compile(
+        r"(?:unique\s+)?constraint\s+[\"']?uq_execution_mutation_key[\"']?(?:\W|$)",
+        re.IGNORECASE,
+    )
+
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        for attribute in ("sqlstate", "pgcode"):
+            code = getattr(current, attribute, None)
+            if code is not None:
+                sqlstates.add(str(code))
+        constraint = getattr(getattr(current, "diag", None), "constraint_name", None)
+        if constraint == "uq_execution_mutation_key":
+            target_constraint = True
+        message = str(current)
+        if constraint_pattern.search(message):
+            target_constraint = True
+        lowered = message.lower()
+        if "unique constraint failed: execution_mutations.idempotency_key" in lowered:
+            sqlite_target = True
+        for nested in (
+            getattr(current, "orig", None),
+            current.__cause__,
+            current.__context__,
+        ):
+            if isinstance(nested, BaseException) and id(nested) not in seen:
+                pending.append(nested)
+
+    return sqlite_target or ("23505" in sqlstates and target_constraint)
 
 
 async def update_execution(
@@ -445,7 +491,15 @@ async def update_execution(
     previous_event = None
     if locked.record is not None:
         previous_event = await repo.current_execution_event(locked.record.id)
-        if previous_event is not None and await repo.has_later_symbol_event(previous_event):
+        event_anchor = (
+            previous_event.created_at if previous_event is not None else locked.record.updated_at
+        )
+        if await repo.has_later_symbol_event(
+            portfolio_id=locked.portfolio.id,
+            symbol=locked.item.symbol,
+            anchor=event_anchor,
+            execution_id=locked.record.id,
+        ):
             raise _conflict(
                 "later_symbol_event_requires_reconcile",
                 "该股票已有后续组合事件，请先核对持仓后再记录",
