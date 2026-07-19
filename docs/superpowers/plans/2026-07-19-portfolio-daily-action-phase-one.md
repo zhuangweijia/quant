@@ -683,6 +683,7 @@ git commit -m "feat: reconcile holdings and cash"
 
 **Interfaces:**
 - Produces immutable dataclasses `EngineProfile`, `EnginePosition`, `EngineCandidate`, `EngineLine`, and `EngineResult`.
+- `EngineResult` includes deterministic `constraint_violations: tuple[str, ...]` so persistence and UI layers can surface constraints that cannot be reached in one trading day.
 - Produces `build_advice(profile, cash, positions, candidates, estimated_cost_rate) -> EngineResult`.
 - Consumes no database or network objects.
 
@@ -753,7 +754,7 @@ Expected: FAIL because `advice_engine` does not exist.
 
 Implement these exact stages in pure functions:
 
-1. Reject non-positive cash, duplicate symbols, non-positive prices, fewer than 60 returns for a new candidate, or held positions missing a price.
+1. Reject non-positive cash, duplicate symbols, non-positive prices, fewer than 60 returns for a new candidate, held positions missing a price, `market_value != quantity × position.price`, or a held candidate whose price differs from the position reference price.
 2. Compute total asset from cash plus current market values.
 3. Score candidates by `score / max(population_stddev(returns), 0.005)`.
 4. Allocate risky exposure `1 - min_cash_ratio` proportionally, iteratively capping stock and industry weights and returning unused weight to cash.
@@ -761,7 +762,9 @@ Implement these exact stages in pure functions:
 6. Compute one-way turnover as `sum(abs(target_weight-current_weight)) / 2`; blend current and proposed weights by `max_daily_turnover / turnover` when necessary.
 7. Convert target value to quantities. New/increased positions round down to 100-share lots. A full exit may sell the complete held quantity; reductions round the reduction down to a 100-share multiple.
 8. Reserve `estimated_cost_rate × traded_value`, reducing buy quantities until estimated cash is non-negative and at least the minimum cash amount.
-9. Emit actions `exit`, `reduce`, `buy`, `increase`, or `hold`; sort in that order.
+9. Emit actions `exit`, `reduce`, `buy`, `increase`, or `hold`; sort in that order. After executable quantities are final, report remaining constraints as `cash_below_minimum`, `stock_cap_exceeded:<symbol>`, and `industry_cap_exceeded:<industry>` in category order and lexical suffix order. Use `industry_cap_exceeded:unknown` for the shared `None`-industry bucket.
+
+The user-approved infeasible-portfolio policy is progressive correction: daily turnover and A-share lot rules remain hard execution limits. Keep the best executable final quantities even when an existing portfolio cannot reach stock, industry, or minimum-cash constraints today. Add clear Chinese notes to every affected engine line, do not claim all constraints were applied when violations remain, and return an empty violation tuple for feasible results. Task 6 must preserve and expose these machine-readable violations, and the advice UI must visibly surface them rather than presenting progressively constrained advice as fully compliant.
 
 ```python
 def historical_max_drawdown(returns: tuple[float, ...]) -> Decimal:
@@ -1401,6 +1404,7 @@ If no files changed, do not create an empty commit.
 - A new authenticated user can complete profile and portfolio setup without leaving the guided flow.
 - A complete user lands on Today and sees a precise non-empty state even when no advice exists.
 - Advice generation is user-isolated, idempotent, versioned, source-snapshotted, and constrained.
+- Infeasible existing portfolios are corrected progressively without breaching daily turnover or A-share lot rules; remaining cash, stock, and industry violations are persisted and surfaced by the advice API and UI in deterministic order.
 - An actionable recommendation contains all quantities, weights, reference-price, explanation, risk, and validity data required by the design.
 - Manual execution and corrections are idempotent, audited, ownership-checked, and atomic with portfolio updates.
 - Stale holdings, expired sessions, price-band breaches, and failed requests never masquerade as valid advice.

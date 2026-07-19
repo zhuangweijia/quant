@@ -363,6 +363,90 @@ def test_cash_only_and_held_only_portfolios_are_deterministic():
     assert held_only.lines[0].target_quantity == 100
 
 
+def test_infeasible_held_portfolio_surfaces_progressive_constraint_violations():
+    held = EnginePosition("600000", "浦发银行", "银行", 100, Decimal("10"), Decimal("1000"))
+
+    result = build_advice(PROFILE, Decimal("1"), (held,), (), Decimal("0.001"))
+
+    assert result.turnover <= PROFILE.max_daily_turnover
+    assert result.lines[0].delta_quantity % 100 == 0
+    assert result.constraint_violations == (
+        "cash_below_minimum",
+        "stock_cap_exceeded:600000",
+        "industry_cap_exceeded:银行",
+    )
+    notes = " ".join(result.lines[0].constraint_notes)
+    assert "最低现金" in notes
+    assert "个股权重" in notes
+    assert "行业权重" in notes
+    assert "单日换手率" in notes
+    assert "整手" in notes
+    assert "已应用个股、行业、回撤、换手与整手约束" not in notes
+
+
+def test_feasible_result_has_no_constraint_violations():
+    result = build_advice(
+        PROFILE,
+        Decimal("100000"),
+        (),
+        (candidate("000001", "银行", "1"),),
+        Decimal("0.001"),
+    )
+
+    assert result.constraint_violations == ()
+
+
+def test_constraint_violation_order_is_category_then_lexical_suffix():
+    positions = (
+        EnginePosition("000003", "科技三", "科技", 100, Decimal("10"), Decimal("1000")),
+        EnginePosition("000002", "银行二", "银行", 100, Decimal("10"), Decimal("1000")),
+        EnginePosition("000001", "银行一", "银行", 100, Decimal("10"), Decimal("1000")),
+    )
+
+    result = build_advice(PROFILE, Decimal("1"), positions, (), Decimal("0"))
+
+    assert result.constraint_violations == (
+        "cash_below_minimum",
+        "stock_cap_exceeded:000001",
+        "stock_cap_exceeded:000002",
+        "stock_cap_exceeded:000003",
+        "industry_cap_exceeded:科技",
+        "industry_cap_exceeded:银行",
+    )
+
+
+def test_none_industries_share_the_unknown_violation_bucket():
+    positions = (
+        EnginePosition("000001", "未分类一", None, 100, Decimal("10"), Decimal("1000")),
+        EnginePosition("000002", "未分类二", None, 100, Decimal("10"), Decimal("1000")),
+    )
+
+    result = build_advice(PROFILE, Decimal("1"), positions, (), Decimal("0"))
+
+    assert "industry_cap_exceeded:unknown" in result.constraint_violations
+    assert all(
+        "未分类行业权重仍高于上限" in " ".join(line.constraint_notes)
+        for line in result.lines
+    )
+
+
+def test_engine_rejects_position_market_value_mismatch():
+    inconsistent = EnginePosition(
+        "000001", "平安银行", "银行", 100, Decimal("10"), Decimal("999")
+    )
+
+    with pytest.raises(ValueError, match="market value"):
+        build_advice(PROFILE, Decimal("1000"), (inconsistent,), (), Decimal("0"))
+
+
+def test_engine_rejects_candidate_price_mismatch_for_held_symbol():
+    held = EnginePosition("000001", "平安银行", "银行", 100, Decimal("10"), Decimal("1000"))
+    repriced = candidate("000001", "银行", "1", price="10.01")
+
+    with pytest.raises(ValueError, match="candidate price"):
+        build_advice(PROFILE, Decimal("1000"), (held,), (repriced,), Decimal("0"))
+
+
 def test_actions_have_stable_priority_then_symbol_order():
     positions = (
         EnginePosition("600004", "退出", "银行", 100, Decimal("10"), Decimal("1000")),

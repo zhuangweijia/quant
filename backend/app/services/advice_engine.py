@@ -80,6 +80,7 @@ class EngineResult:
     total_asset: Decimal
     historical_max_drawdown: Decimal
     turnover: Decimal
+    constraint_violations: tuple[str, ...]
     lines: tuple[EngineLine, ...]
 
 
@@ -112,15 +113,23 @@ def _validate_inputs(
     if len(candidate_symbols) != len(set(candidate_symbols)):
         raise ValueError("duplicate candidate symbol")
 
+    position_by_symbol = {position.symbol: position for position in positions}
     held_symbols = set(position_symbols)
     for position in positions:
         if position.price is None or position.price <= ZERO:
             raise ValueError("held position price must be positive")
+        if position.market_value != Decimal(position.quantity) * position.price:
+            raise ValueError("position market value must equal quantity times price")
     for candidate in candidates:
         if candidate.price <= ZERO:
             raise ValueError("candidate price must be positive")
         if candidate.symbol not in held_symbols and len(candidate.returns) < 60:
             raise ValueError("new candidate returns must contain at least 60 sessions")
+        if (
+            candidate.symbol in held_symbols
+            and candidate.price != position_by_symbol[candidate.symbol].price
+        ):
+            raise ValueError("candidate price must equal held position price")
 
 
 def _adjusted_scores(
@@ -390,6 +399,45 @@ def _action(current_quantity: int, target_quantity: int) -> AdviceAction:
     return "hold"
 
 
+def _remaining_constraint_violations(
+    profile: EngineProfile,
+    estimated_cash: Decimal,
+    total_asset: Decimal,
+    target_weights: dict[str, Decimal],
+    industries: dict[str, str | None],
+) -> tuple[tuple[str, ...], set[str], set[str | None], bool]:
+    cash_below_minimum = estimated_cash < total_asset * profile.min_cash_ratio
+    stock_exceeded = {
+        symbol
+        for symbol, target_weight in target_weights.items()
+        if target_weight > profile.max_stock_weight
+    }
+    industry_weights: dict[str | None, Decimal] = {}
+    for symbol in sorted(target_weights):
+        industry = industries[symbol]
+        industry_weights[industry] = (
+            industry_weights.get(industry, ZERO) + target_weights[symbol]
+        )
+    industry_exceeded = {
+        industry
+        for industry, target_weight in industry_weights.items()
+        if target_weight > profile.max_industry_weight
+    }
+
+    violations: list[str] = []
+    if cash_below_minimum:
+        violations.append("cash_below_minimum")
+    violations.extend(f"stock_cap_exceeded:{symbol}" for symbol in sorted(stock_exceeded))
+    violations.extend(
+        f"industry_cap_exceeded:{'unknown' if industry is None else industry}"
+        for industry in sorted(
+            industry_exceeded,
+            key=lambda value: "unknown" if value is None else value,
+        )
+    )
+    return tuple(violations), stock_exceeded, industry_exceeded, cash_below_minimum
+
+
 def build_advice(
     profile: EngineProfile,
     cash: Decimal,
@@ -447,6 +495,27 @@ def build_advice(
         estimated_cost_rate,
     )
 
+    target_weights = {
+        symbol: Decimal(targets[symbol]) * concrete_prices[symbol] / total_asset
+        for symbol in all_symbols
+    }
+    industries = {
+        symbol: (
+            candidate_by_symbol[symbol].industry
+            if symbol in candidate_by_symbol
+            else position_by_symbol[symbol].industry
+        )
+        for symbol in all_symbols
+    }
+    (
+        constraint_violations,
+        stock_exceeded,
+        industry_exceeded,
+        cash_below_minimum,
+    ) = _remaining_constraint_violations(
+        profile, estimated_cash, total_asset, target_weights, industries
+    )
+
     lines: list[EngineLine] = []
     for symbol in all_symbols:
         position = position_by_symbol.get(symbol)
@@ -454,11 +523,26 @@ def build_advice(
         current_quantity = current_quantities.get(symbol, 0)
         target_quantity = targets[symbol]
         reference_price = concrete_prices[symbol]
-        notes = ["已应用个股、行业、回撤、换手与整手约束"]
+        notes = [
+            "已按约束优先级生成当前可执行目标"
+            if constraint_violations
+            else "已应用个股、行业、回撤、换手与整手约束"
+        ]
         if candidate is None:
             notes.append("不在当日候选范围")
         if symbol in reduced_for_cost:
             notes.append("为预留交易成本下调买入数量")
+        if cash_below_minimum and (current_quantity > 0 or target_quantity > 0):
+            notes.append("受单日换手率或A股整手交易限制，预计现金仍低于最低现金要求")
+        if symbol in stock_exceeded:
+            notes.append("受单日换手率或A股整手交易限制，个股权重仍高于上限")
+        if industries[symbol] in industry_exceeded and target_quantity > 0:
+            if industries[symbol] is None:
+                notes.append("受单日换手率或A股整手交易限制，未分类行业权重仍高于上限")
+            else:
+                notes.append(
+                    f"受单日换手率或A股整手交易限制，{industries[symbol]}行业权重仍高于上限"
+                )
         lines.append(
             EngineLine(
                 symbol=symbol,
@@ -469,7 +553,7 @@ def build_advice(
                 target_quantity=target_quantity,
                 delta_quantity=target_quantity - current_quantity,
                 current_weight=current_weights.get(symbol, ZERO),
-                target_weight=Decimal(target_quantity) * reference_price / total_asset,
+                target_weight=target_weights[symbol],
                 reference_price=reference_price,
                 price_tolerance=profile.price_tolerance,
                 score=candidate.score if candidate else ZERO,
@@ -495,5 +579,6 @@ def build_advice(
         total_asset=total_asset,
         historical_max_drawdown=scenario_drawdown,
         turnover=turnover,
+        constraint_violations=constraint_violations,
         lines=tuple(lines),
     )
