@@ -202,6 +202,8 @@ class PortfolioRepository:
             )
         )
         for item in positions:
+            if item.quantity == 0:
+                continue
             self.db.add(
                 PortfolioEvent(
                     id=uuid.uuid4(),

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, tzinfo
 from decimal import Decimal
 
@@ -137,6 +138,86 @@ def test_money_decimal_serializes_as_an_exact_json_string():
     )
     assert setup.total_capital == Decimal("10000000000000.0001")
     assert '"total_capital":"10000000000000.0001"' in setup.model_dump_json()
+
+
+def test_money_fields_require_quoted_decimal_json_tokens():
+    quoted_reconcile = {
+        "expected_updated_at": "2026-07-19T09:00:00+08:00",
+        "cash": "100.0001",
+        "positions": [],
+    }
+    reconcile = HoldingsReconcileRequest.model_validate_json(json.dumps(quoted_reconcile))
+    assert reconcile.cash == Decimal("100.0001")
+    with pytest.raises(ValidationError):
+        HoldingsReconcileRequest.model_validate_json(
+            json.dumps({**quoted_reconcile, "cash": 100.0001})
+        )
+
+    quoted_cash_movement = {
+        "kind": "deposit",
+        "amount": "25.0001",
+        "occurred_at": "2026-07-19T09:00:00+08:00",
+    }
+    assert CashMovementRequest.model_validate_json(
+        json.dumps(quoted_cash_movement)
+    ).amount == Decimal("25.0001")
+    with pytest.raises(ValidationError):
+        CashMovementRequest.model_validate_json(
+            json.dumps({**quoted_cash_movement, "amount": 25.0001})
+        )
+
+    quoted_setup = {
+        "profile": {
+            "investment_horizon_days": 120,
+            "risk_level": "balanced",
+            "max_drawdown": 0.15,
+            "max_stock_weight": 0.08,
+            "max_industry_weight": 0.25,
+            "min_cash_ratio": 0.1,
+            "max_daily_turnover": 0.3,
+        },
+        "total_capital": "1000.0001",
+        "cash": "900.0001",
+        "positions": [{"symbol": "000001", "quantity": 10, "average_cost": "10"}],
+    }
+    setup = PortfolioSetupRequest.model_validate_json(json.dumps(quoted_setup))
+    assert setup.cash == Decimal("900.0001")
+    for field in ("total_capital", "cash"):
+        with pytest.raises(ValidationError):
+            PortfolioSetupRequest.model_validate_json(
+                json.dumps({**quoted_setup, field: 1000.0001})
+            )
+    with pytest.raises(ValidationError):
+        PortfolioSetupRequest.model_validate_json(
+            json.dumps(
+                {
+                    **quoted_setup,
+                    "positions": [
+                        {"symbol": "000001", "quantity": 10, "average_cost": 10}
+                    ],
+                }
+            )
+        )
+
+    quoted_execution = {
+        "disposition": "executed",
+        "quantity": 1,
+        "price": "10.0001",
+        "fee": "0.0001",
+        "executed_at": "2026-07-19T09:00:00+08:00",
+        "expected_revision": 0,
+    }
+    assert ExecutionUpdateRequest.model_validate_json(
+        json.dumps(quoted_execution)
+    ).price == Decimal("10.0001")
+    for field in ("price", "fee"):
+        with pytest.raises(ValidationError):
+            ExecutionUpdateRequest.model_validate_json(
+                json.dumps({**quoted_execution, field: 10.0001})
+            )
+
+    profile = InvestmentProfileInput.model_validate_json(json.dumps(quoted_setup["profile"]))
+    assert profile.max_drawdown == Decimal("0.15")
 
 
 class NoneOffsetTimezone(tzinfo):

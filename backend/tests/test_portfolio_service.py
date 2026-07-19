@@ -355,20 +355,50 @@ async def test_setup_failure_propagates_without_service_commit_or_partial_respon
 
 @pytest.mark.asyncio
 async def test_reconcile_rejects_stale_updated_at(monkeypatch):
+    older = datetime(2026, 7, 19, 9, tzinfo=UTC)
+    newer = datetime(2026, 7, 19, 9, 1, tzinfo=UTC)
     repo = SimpleNamespace(
-        lock_portfolio=AsyncMock(return_value=SimpleNamespace(updated_at="newer")),
+        lock_portfolio=AsyncMock(return_value=SimpleNamespace(updated_at=newer)),
+        get_positions=AsyncMock(),
+        create_snapshot=AsyncMock(),
+        replace_positions=AsyncMock(),
+        create_event=AsyncMock(),
     )
     monkeypatch.setattr(portfolio_service, "PortfolioRepository", lambda db: repo)
+    db = SimpleNamespace(flush=AsyncMock())
 
     with pytest.raises(HTTPException) as exc:
         await portfolio_service.reconcile_holdings(
-            SimpleNamespace(),
+            db,
             "user-1",
-            SimpleNamespace(expected_updated_at="older", cash=Decimal("100"), positions=[]),
+            SimpleNamespace(expected_updated_at=older, cash=Decimal("100"), positions=[]),
             None,
         )
 
     assert exc.value.status_code == 409
+    repo.get_positions.assert_not_awaited()
+    repo.create_snapshot.assert_not_awaited()
+    repo.replace_positions.assert_not_awaited()
+    repo.create_event.assert_not_awaited()
+    db.flush.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_opening_events_skip_zero_quantity_positions():
+    added = []
+    db = SimpleNamespace(add=added.append)
+    repo = portfolio_service.PortfolioRepository(db)
+
+    await repo.create_opening_events(
+        "portfolio-1",
+        Decimal("100"),
+        [
+            SimpleNamespace(symbol="000001", quantity=0, average_cost=Decimal("10")),
+            SimpleNamespace(symbol="000002", quantity=5, average_cost=Decimal("12")),
+        ],
+    )
+
+    assert [event.symbol for event in added] == [None, "000002"]
 
 
 @pytest.mark.asyncio

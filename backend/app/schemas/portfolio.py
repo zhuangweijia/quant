@@ -3,7 +3,14 @@ from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    model_validator,
+)
 
 
 class StrictModel(BaseModel):
@@ -14,8 +21,16 @@ class ResponseModel(StrictModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
 
+def require_decimal_string(value: object) -> Decimal | str:
+    if isinstance(value, (Decimal, str)):
+        return value
+    raise ValueError("金额必须使用十进制字符串")
+
+
 MonetaryDecimal = Annotated[
-    Decimal, PlainSerializer(str, return_type=str, when_used="json")
+    Decimal,
+    BeforeValidator(require_decimal_string),
+    PlainSerializer(str, return_type=str, when_used="json"),
 ]
 RatioDecimal = Annotated[
     Decimal, PlainSerializer(float, return_type=float, when_used="json")
