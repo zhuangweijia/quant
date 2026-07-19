@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { adviceApi } from '@/api/advice'
 import { usePortfolioStore } from '@/stores/portfolio'
-import type { AdviceItemResponse, AdviceTodayResponse } from '@/types/advice'
+import type {
+  AdviceItemResponse,
+  AdviceTodayResponse,
+  DailyAdviceResponse,
+} from '@/types/advice'
 import { useAdviceStore } from './advice'
 
 vi.mock('@/api/advice', () => ({
@@ -39,7 +43,23 @@ const pendingItem: AdviceItemResponse = {
   execution: null,
 }
 
-function today(item: AdviceItemResponse = pendingItem): AdviceTodayResponse {
+const unchangedItem: AdviceItemResponse = {
+  ...pendingItem,
+  id: 'item-2',
+  symbol: '000002',
+  name: '万科A',
+  action: 'hold',
+  target_quantity: 0,
+  delta_quantity: 0,
+  target_weight: 0,
+}
+
+type AvailableToday = Extract<
+  AdviceTodayResponse,
+  { advice: DailyAdviceResponse }
+>
+
+function today(items: AdviceItemResponse[] = [pendingItem]): AvailableToday {
   return {
     state: 'ready',
     setup_required: false,
@@ -59,13 +79,26 @@ function today(item: AdviceItemResponse = pendingItem): AdviceTodayResponse {
       portfolio_updated_at: '2026-07-18T16:00:00+08:00',
       stale_warnings: [],
       constraint_violations: [],
-      items: [item],
+      items,
       error_code: null,
       error_message: null,
     },
     error_code: null,
     error_message: null,
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
+async function flushMicrotasks() {
+  await Promise.resolve()
+  await Promise.resolve()
 }
 
 describe('useAdviceStore', () => {
@@ -88,7 +121,26 @@ describe('useAdviceStore', () => {
     expect(store.error).toBe('建议服务不可用')
   })
 
-  it('uses a store-generated idempotency key and reloads today and portfolio', async () => {
+  it('drops advice when generation returns the not-generated state', async () => {
+    const notGenerated: DailyAdviceResponse = {
+      ...today().advice,
+      status: 'not_generated',
+    }
+    vi.mocked(adviceApi.generate).mockResolvedValue({ data: notGenerated } as never)
+    const store = useAdviceStore()
+
+    await store.generate()
+
+    expect(store.today).toEqual({
+      state: 'not_generated',
+      setup_required: false,
+      advice: null,
+      error_code: null,
+      error_message: null,
+    })
+  })
+
+  it('replaces one item before concurrently reloading today and portfolio', async () => {
     const executedItem: AdviceItemResponse = {
       ...pendingItem,
       status: 'executed',
@@ -112,19 +164,23 @@ describe('useAdviceStore', () => {
     vi.mocked(adviceApi.updateExecution).mockResolvedValue({
       data: { item: executedItem, advice_state: 'handled' },
     } as never)
-    vi.mocked(adviceApi.getToday).mockResolvedValue({
-      data: {
-        ...today(executedItem),
-        state: 'handled',
-        advice: { ...today(executedItem).advice, status: 'handled' },
+    const refreshedToday: AdviceTodayResponse = {
+      ...today([executedItem, unchangedItem]),
+      state: 'handled',
+      advice: {
+        ...today([executedItem, unchangedItem]).advice,
+        status: 'handled',
       },
-    } as never)
+    }
+    const todayReload = deferred<never>()
+    const portfolioReload = deferred<never>()
+    vi.mocked(adviceApi.getToday).mockReturnValue(todayReload.promise)
     const portfolioStore = usePortfolioStore()
-    const loadPortfolio = vi.spyOn(portfolioStore, 'loadPortfolio').mockResolvedValue(
-      undefined as never,
-    )
+    const loadPortfolio = vi
+      .spyOn(portfolioStore, 'loadPortfolio')
+      .mockReturnValue(portfolioReload.promise)
     const store = useAdviceStore()
-    store.today = today()
+    store.today = today([pendingItem, unchangedItem])
     const payload = {
       disposition: 'executed' as const,
       quantity: 100,
@@ -136,7 +192,11 @@ describe('useAdviceStore', () => {
       acknowledge_outside_advice: false,
     }
 
-    await store.updateExecution('item-1', payload)
+    let settled = false
+    const pending = store.updateExecution('item-1', payload).finally(() => {
+      settled = true
+    })
+    await flushMicrotasks()
 
     expect(adviceApi.updateExecution).toHaveBeenCalledWith(
       'item-1',
@@ -146,6 +206,18 @@ describe('useAdviceStore', () => {
     expect(adviceApi.getToday).toHaveBeenCalledOnce()
     expect(loadPortfolio).toHaveBeenCalledOnce()
     expect(store.today?.advice?.items[0]).toEqual(executedItem)
+    expect(store.today?.advice?.items[1]).toEqual(unchangedItem)
     expect(store.today?.state).toBe('handled')
+    expect(settled).toBe(false)
+
+    todayReload.resolve({ data: refreshedToday } as never)
+    await flushMicrotasks()
+    expect(settled).toBe(false)
+
+    portfolioReload.resolve(undefined as never)
+    await pending
+
+    expect(store.today).toEqual(refreshedToday)
+    expect(store.loading).toBe(false)
   })
 })

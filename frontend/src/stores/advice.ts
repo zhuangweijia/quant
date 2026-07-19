@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import { adviceApi } from '@/api/advice'
 import { usePortfolioStore } from '@/stores/portfolio'
 import type {
+  AdviceState,
   AdviceTodayResponse,
   DailyAdviceResponse,
   ExecutionResponse,
@@ -21,6 +22,47 @@ function errorMessage(error: unknown): string {
     return error.message
   }
   return String(error)
+}
+
+interface AdviceTodayMetadata {
+  setup_required: boolean
+  error_code: string | null
+  error_message: string | null
+}
+
+function requireAdvice(
+  state: AdviceState,
+  advice: DailyAdviceResponse | null,
+): DailyAdviceResponse {
+  if (advice === null) {
+    throw new Error(`Advice state ${state} requires advice data`)
+  }
+  return advice
+}
+
+function adviceTodayForState(
+  state: AdviceState,
+  advice: DailyAdviceResponse | null,
+  metadata: AdviceTodayMetadata,
+): AdviceTodayResponse {
+  switch (state) {
+    case 'not_generated':
+      return { state, advice: null, ...metadata }
+    case 'generating':
+    case 'failed':
+      return { state, advice, ...metadata }
+    case 'ready':
+    case 'partially_handled':
+    case 'handled':
+    case 'expired':
+      return { state, advice: requireAdvice(state, advice), ...metadata }
+    default:
+      return assertNever(state)
+  }
+}
+
+function assertNever(value: never): never {
+  throw new Error(`Unsupported advice state: ${value}`)
 }
 
 export const useAdviceStore = defineStore('advice', () => {
@@ -75,29 +117,28 @@ export const useAdviceStore = defineStore('advice', () => {
   }
 
   function todayFromAdvice(advice: DailyAdviceResponse): AdviceTodayResponse {
-    return {
-      state: advice.status,
+    return adviceTodayForState(advice.status, advice, {
       setup_required: false,
-      advice,
       error_code: advice.error_code,
       error_message: advice.error_message,
-    } as AdviceTodayResponse
+    })
   }
 
   function applyExecution(response: ExecutionResponse) {
     const current = today.value
     if (!current?.advice) return
-    today.value = {
-      ...current,
-      state: response.advice_state,
-      advice: {
-        ...current.advice,
-        status: response.advice_state,
-        items: current.advice.items.map((item) =>
-          item.id === response.item.id ? response.item : item,
-        ),
-      },
-    } as AdviceTodayResponse
+    const updatedAdvice: DailyAdviceResponse = {
+      ...current.advice,
+      status: response.advice_state,
+      items: current.advice.items.map((item) =>
+        item.id === response.item.id ? response.item : item,
+      ),
+    }
+    today.value = adviceTodayForState(response.advice_state, updatedAdvice, {
+      setup_required: current.setup_required,
+      error_code: current.error_code,
+      error_message: current.error_message,
+    })
   }
 
   return {
