@@ -399,13 +399,19 @@ def _aggregate_advice_status(advice: DailyAdvice, items: list[AdviceItem]) -> st
 
 
 def _is_idempotency_conflict(error: IntegrityError) -> bool:
-    pending: list[BaseException] = [error]
+    if not isinstance(error.orig, BaseException):
+        return False
+
+    pending: list[BaseException] = [error.orig]
     seen: set[int] = set()
     sqlstates: set[str] = set()
     target_constraint = False
     sqlite_target = False
-    constraint_pattern = re.compile(
-        r"(?:unique\s+)?constraint\s+[\"']?uq_execution_mutation_key[\"']?(?:\W|$)",
+    postgres_target_line = re.compile(
+        r"^(?:(?:<class\s+[\"']asyncpg\.[^\"']*UniqueViolationError[\"']>"
+        r"|asyncpg\.[\w.]*UniqueViolationError):\s*)?"
+        r"duplicate key value violates unique constraint "
+        r"[\"']uq_execution_mutation_key[\"']$",
         re.IGNORECASE,
     )
 
@@ -421,17 +427,15 @@ def _is_idempotency_conflict(error: IntegrityError) -> bool:
         constraint = getattr(getattr(current, "diag", None), "constraint_name", None)
         if constraint == "uq_execution_mutation_key":
             target_constraint = True
-        message = str(current)
-        if constraint_pattern.search(message):
+        first_line = str(current).partition("\n")[0].strip()
+        if postgres_target_line.fullmatch(first_line):
             target_constraint = True
-        lowered = message.lower()
-        if "unique constraint failed: execution_mutations.idempotency_key" in lowered:
-            sqlite_target = True
-        for nested in (
-            getattr(current, "orig", None),
-            current.__cause__,
-            current.__context__,
+        if (
+            first_line.lower()
+            == "unique constraint failed: execution_mutations.idempotency_key"
         ):
+            sqlite_target = True
+        for nested in (current.__cause__, current.__context__):
             if isinstance(nested, BaseException) and id(nested) not in seen:
                 pending.append(nested)
 

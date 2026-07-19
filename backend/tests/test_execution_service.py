@@ -222,6 +222,44 @@ def test_asyncpg_wrapped_target_unique_violation_is_mapped_by_exact_constraint(
     assert execution_service._is_idempotency_conflict(error) is True
 
 
+def test_asyncpg_class_prefix_and_single_quoted_target_constraint_are_mapped():
+    driver = Exception(
+        "<class 'asyncpg.exceptions.UniqueViolationError'>: duplicate key value "
+        "violates unique constraint 'uq_execution_mutation_key'"
+    )
+    driver.sqlstate = "23505"
+    error = IntegrityError("insert", {}, driver)
+
+    assert execution_service._is_idempotency_conflict(error) is True
+
+
+def test_sqlalchemy_statement_and_params_cannot_spoof_target_constraint():
+    driver = Exception(
+        'duplicate key value violates unique constraint "uq_execution_item"'
+    )
+    driver.sqlstate = "23505"
+    error = IntegrityError(
+        "INSERT INTO execution_mutations /* constraint uq_execution_mutation_key */",
+        {"idempotency_key": "constraint uq_execution_mutation_key"},
+        driver,
+    )
+
+    assert "constraint uq_execution_mutation_key" in str(error)
+    assert execution_service._is_idempotency_conflict(error) is False
+
+
+def test_postgres_detail_key_value_cannot_spoof_target_constraint():
+    driver = Exception(
+        'duplicate key value violates unique constraint "uq_execution_item"\n'
+        "DETAIL: Key (idempotency_key)=(duplicate key value violates unique "
+        'constraint "uq_execution_mutation_key") already exists.'
+    )
+    driver.pgcode = "23505"
+    error = IntegrityError("insert", {}, driver)
+
+    assert execution_service._is_idempotency_conflict(error) is False
+
+
 @pytest.mark.parametrize(
     ("code", "constraint"),
     [
