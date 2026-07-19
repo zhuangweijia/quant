@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTheme } from '@/composables/useTheme'
+import { getAdminNav, getPrimaryNav } from '@/navigation/items'
+import { useAuthStore } from '@/stores/auth'
 import {
   CommandDialog as UiCommandDialog,
   CommandEmpty as UiCommandEmpty,
@@ -12,26 +14,17 @@ import {
   CommandSeparator as UiCommandSeparator,
 } from '@/components/ui/command'
 import {
-  Activity,
-  BrainCircuit,
-  CandlestickChart,
   MoonStar,
-  Settings2,
   SunMedium,
-  Trophy,
 } from 'lucide-vue-next'
 
 const router = useRouter()
+const authStore = useAuthStore()
 const { isDark, toggleTheme } = useTheme()
 const open = ref(false)
 
-const navItems = [
-  { title: '看板', icon: Activity, path: '/dashboard' },
-  { title: '排名表', icon: Trophy, path: '/ranking' },
-  { title: '行情', icon: CandlestickChart, path: '/market' },
-  { title: '模型', icon: BrainCircuit, path: '/model' },
-  { title: '设置', icon: Settings2, path: '/settings' },
-]
+const primaryNav = computed(() => getPrimaryNav(authStore.role))
+const adminNav = computed(() => getAdminNav(authStore.role))
 
 function handleSelect(path: string) {
   open.value = false
@@ -67,7 +60,7 @@ defineExpose({ setOpen })
       <UiCommandEmpty>没有找到匹配的结果</UiCommandEmpty>
       <UiCommandGroup heading="导航">
         <UiCommandItem
-          v-for="item in navItems"
+          v-for="item in primaryNav"
           :key="item.path"
           :value="item.title"
           @select="handleSelect(item.path)"
@@ -76,6 +69,20 @@ defineExpose({ setOpen })
           <span>{{ item.title }}</span>
         </UiCommandItem>
       </UiCommandGroup>
+      <template v-if="adminNav.length">
+        <UiCommandSeparator />
+        <UiCommandGroup heading="管理">
+          <UiCommandItem
+            v-for="item in adminNav"
+            :key="item.path"
+            :value="item.title"
+            @select="handleSelect(item.path)"
+          >
+            <component :is="item.icon" class="mr-2 size-4" />
+            <span>{{ item.title }}</span>
+          </UiCommandItem>
+        </UiCommandGroup>
+      </template>
       <UiCommandSeparator />
       <UiCommandGroup heading="操作">
         <UiCommandItem value="切换主题" @select="handleTheme">

@@ -9,8 +9,8 @@ const checks = [
   {
     file: 'src/components/layout/AppLayout.vue',
     expected: ['h-16', '<UiSidebarTrigger class="size-9" />', 'max-w-7xl px-5 py-7'],
+    expectedCounts: { '<CommandMenu': 1 },
     forbidden: [
-      'CommandMenu',
       'openCommandMenu',
       '<Search',
       '搜索...',
@@ -70,6 +70,13 @@ for (const check of checks) {
   for (const forbidden of check.forbidden ?? []) {
     if (contents.includes(forbidden)) {
       failures.push(`${check.file} still contains: ${forbidden}`)
+    }
+  }
+
+  for (const [expected, count] of Object.entries(check.expectedCounts ?? {})) {
+    const actual = contents.split(expected).length - 1
+    if (actual !== count) {
+      failures.push(`${check.file} contains ${actual} occurrences of ${expected}; expected ${count}`)
     }
   }
 }

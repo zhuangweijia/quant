@@ -116,7 +116,7 @@ const onSubmit = handleSubmit(async (values) => {
             {{ isRegister ? '创建 Quant Desk 账户' : '登录 Quant Desk' }}
           </UiCardTitle>
           <UiCardDescription>
-            {{ isRegister ? '创建账户，开始查看每日选股分析。' : '查看今日选股结果、股票排名与推荐理由。' }}
+            {{ isRegister ? '创建账户，开始查看每日选股分析。' : '查看下一交易日组合建议、仓位调整依据与主要风险' }}
           </UiCardDescription>
         </UiCardHeader>
         <UiCardContent>

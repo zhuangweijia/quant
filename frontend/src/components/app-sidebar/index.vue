@@ -1,28 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { getAdminNav, getPrimaryNav } from '@/navigation/items'
 import { useAuthStore } from '@/stores/auth'
 import {
-  Activity,
-  BrainCircuit,
-  CandlestickChart,
   LogOut,
   Settings2,
   TrendingUp,
-  Trophy,
 } from 'lucide-vue-next'
 
 const route = useRoute()
 const router = useRouter()
 const authStore = useAuthStore()
 
-const navItems = [
-  { title: '看板', icon: Activity, path: '/dashboard' },
-  { title: '排名表', icon: Trophy, path: '/ranking' },
-  { title: '行情', icon: CandlestickChart, path: '/market' },
-  { title: '模型', icon: BrainCircuit, path: '/model' },
-  { title: '设置', icon: Settings2, path: '/settings' },
-]
+const primaryNav = computed(() => getPrimaryNav(authStore.role))
+const adminNav = computed(() => getAdminNav(authStore.role))
 
 const isActive = (path: string) => route.path.startsWith(path)
 
@@ -45,8 +37,8 @@ function handleLogout() {
               <TrendingUp class="size-4" />
             </div>
             <div class="grid flex-1 text-left text-sm leading-tight group-data-[collapsible=icon]:hidden">
-              <span class="truncate font-bold">Stock Analysis</span>
-              <span class="truncate text-xs text-muted-foreground">AI 选股分析</span>
+              <span class="truncate font-bold">Quant Desk</span>
+              <span class="truncate text-xs text-muted-foreground">每日组合决策</span>
             </div>
           </UiSidebarMenuButton>
         </UiSidebarMenuItem>
@@ -55,9 +47,26 @@ function handleLogout() {
 
     <UiSidebarContent class="px-2 py-3">
       <UiSidebarGroup class="gap-2">
-        <UiSidebarGroupLabel>Workspace</UiSidebarGroupLabel>
+        <UiSidebarGroupLabel>每日决策</UiSidebarGroupLabel>
         <UiSidebarMenu>
-          <UiSidebarMenuItem v-for="item in navItems" :key="item.path">
+          <UiSidebarMenuItem v-for="item in primaryNav" :key="item.path">
+            <UiSidebarMenuButton
+              as-child
+              :is-active="isActive(item.path)"
+              :tooltip="item.title"
+            >
+              <router-link :to="item.path" class="flex min-w-0 items-center gap-3">
+                <component :is="item.icon" class="size-4" />
+                <span>{{ item.title }}</span>
+              </router-link>
+            </UiSidebarMenuButton>
+          </UiSidebarMenuItem>
+        </UiSidebarMenu>
+      </UiSidebarGroup>
+      <UiSidebarGroup v-if="adminNav.length" class="gap-2">
+        <UiSidebarGroupLabel>管理</UiSidebarGroupLabel>
+        <UiSidebarMenu>
+          <UiSidebarMenuItem v-for="item in adminNav" :key="item.path">
             <UiSidebarMenuButton
               as-child
               :is-active="isActive(item.path)"

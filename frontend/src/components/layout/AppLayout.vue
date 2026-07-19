@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import AppSidebar from '@/components/app-sidebar/index.vue'
+import CommandMenu from '@/components/command-menu/index.vue'
 </script>
 
 <template>
   <UiSidebarProvider>
     <AppSidebar />
+    <CommandMenu />
     <UiSidebarInset>
       <header class="flex h-16 shrink-0 items-center gap-4 border-b bg-background/95 px-5 backdrop-blur supports-[backdrop-filter]:bg-background/80 lg:px-6">
         <UiSidebarTrigger class="size-9" />

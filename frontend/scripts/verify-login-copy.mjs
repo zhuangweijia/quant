@@ -14,7 +14,6 @@ const requiredCopy = [
   '分析结果',
   '强推 · 观望 · 回避',
   '登录 Quant Desk',
-  '查看今日选股结果、股票排名与推荐理由。',
   '查看今日选股',
   '创建 Quant Desk 账户',
   '创建账户，开始查看每日选股分析。',
@@ -28,10 +27,20 @@ const obsoleteCopy = [
   'Rules + alerts',
   '登录你的交易工作台',
   '继续访问策略、行情、交易与风控模块。',
+  '查看今日选股结果、股票排名与推荐理由。',
+]
+
+const exactCopy = [
+  "'查看下一交易日组合建议、仓位调整依据与主要风险'",
 ]
 
 for (const text of requiredCopy) {
   if (!source.includes(text)) throw new Error(`Missing approved login copy: ${text}`)
+}
+
+for (const text of exactCopy) {
+  const count = source.split(text).length - 1
+  if (count !== 1) throw new Error(`Expected exact login copy once, found ${count}: ${text}`)
 }
 
 for (const text of obsoleteCopy) {
