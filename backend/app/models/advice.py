@@ -37,6 +37,7 @@ class DailyAdvice(UUIDMixin, TimestampMixin, Base):
     current_exposure: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
     target_exposure: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
     estimated_cash: Mapped[Decimal] = mapped_column(Numeric(20, 4), nullable=False)
+    constraint_violations: Mapped[list] = mapped_column(JsonType, default=list, nullable=False)
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     superseded_by_id: Mapped[uuid.UUID | None] = mapped_column(
         UuidType(as_uuid=True), ForeignKey("daily_advices.id"), nullable=True

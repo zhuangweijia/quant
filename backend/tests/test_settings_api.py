@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -12,7 +12,8 @@ from app.schemas.settings import (
     SystemParams,
     SystemParamsRequest,
 )
-from app.services.analysis_pipeline import AnalysisPipeline
+from app.services import analysis_pipeline as analysis_pipeline_module
+from app.services.analysis_pipeline import STAGES, AnalysisPipeline
 
 
 def params(analysis_time="17:00"):
@@ -171,3 +172,19 @@ def test_analysis_pipeline_registers_daily_cleanup(monkeypatch):
     assert cleanup_func.__name__ == "run_cleanup"
     assert cleanup_job["replace_existing"] is True
     assert str(cleanup_job["trigger"]).startswith("cron[hour='3', minute='30'")
+
+
+@pytest.mark.asyncio
+async def test_portfolio_advice_stage_runs_after_ranking_for_shanghai_signal_date(monkeypatch):
+    assert STAGES[-2:] == ["ranking", "portfolio_advice"]
+    generate = AsyncMock(return_value={"succeeded": [], "failed": []})
+    monkeypatch.setattr("app.services.advice_service.generate_for_all_users", generate)
+    monkeypatch.setattr(
+        analysis_pipeline_module,
+        "_shanghai_signal_date",
+        lambda: date(2026, 7, 19),
+    )
+
+    await AnalysisPipeline()._execute_stage("portfolio_advice")
+
+    generate.assert_awaited_once_with(date(2026, 7, 19))

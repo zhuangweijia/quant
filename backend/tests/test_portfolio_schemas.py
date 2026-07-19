@@ -5,7 +5,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from app.schemas.advice import AdviceTodayResponse, ExecutionUpdateRequest
+from app.schemas.advice import AdviceTodayResponse, DailyAdviceResponse, ExecutionUpdateRequest
 from app.schemas.portfolio import (
     CashMovementRequest,
     HoldingsReconcileRequest,
@@ -245,3 +245,31 @@ def test_none_offset_timezones_are_rejected():
             executed_at=none_offset,
             expected_revision=0,
         )
+
+
+def test_daily_advice_serializes_money_exactly_and_exposes_constraint_codes():
+    advice = DailyAdviceResponse(
+        id="00000000-0000-0000-0000-000000000001",
+        signal_date="2026-07-17",
+        version=1,
+        status="ready",
+        model_version="model-v1",
+        data_date="2026-07-17",
+        current_exposure=Decimal("0.2"),
+        target_exposure=Decimal("0.3"),
+        current_cash=Decimal("8000.0001"),
+        estimated_cash=Decimal("7000.0001"),
+        total_asset=Decimal("10000.0001"),
+        generated_at="2026-07-17T09:00:00+00:00",
+        portfolio_updated_at="2026-07-17T08:00:00+00:00",
+        stale_warnings=[],
+        constraint_violations=["cash_below_minimum", "stock_cap_exceeded:000001"],
+    )
+
+    encoded = advice.model_dump_json()
+    assert advice.constraint_violations == [
+        "cash_below_minimum",
+        "stock_cap_exceeded:000001",
+    ]
+    assert '"estimated_cash":"7000.0001"' in encoded
+    assert '"target_exposure":0.3' in encoded

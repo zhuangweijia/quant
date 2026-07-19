@@ -74,6 +74,7 @@ class DailyAdviceResponse(ResponseModel):
     generated_at: datetime
     portfolio_updated_at: datetime
     stale_warnings: list[str]
+    constraint_violations: list[str] = Field(default_factory=list)
     items: list[AdviceItemResponse] = Field(default_factory=list)
     error_code: str | None = None
     error_message: str | None = None

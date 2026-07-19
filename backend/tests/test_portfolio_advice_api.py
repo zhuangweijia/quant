@@ -1,10 +1,12 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
+from app.api.v1 import advice as advice_api
 from app.api.v1 import portfolio as portfolio_api
 from app.schemas.portfolio import (
     CashMovementRequest,
@@ -122,3 +124,57 @@ async def test_reconcile_and_cash_routes_use_current_user_id(monkeypatch):
 
     reconcile.assert_awaited_once_with(db, user.id, holdings, ("127.0.0.1", "test"))
     cash_movement.assert_awaited_once_with(db, user.id, movement, ("127.0.0.1", "test"))
+
+
+@pytest.mark.asyncio
+async def test_advice_today_uses_authenticated_user_and_returns_business_state(monkeypatch):
+    state = SimpleNamespace(state="not_generated")
+    get_today = AsyncMock(return_value=state)
+    monkeypatch.setattr(advice_api.advice_service, "get_today_state", get_today)
+    db = SimpleNamespace()
+    user = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
+
+    response = await advice_api.get_today_advice(user=user, db=db)
+
+    get_today.assert_awaited_once_with(db, user.id)
+    assert response.data is state
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_latest_ranked_date_and_authenticated_user(monkeypatch):
+    generated = SimpleNamespace(id="advice-1")
+    response = SimpleNamespace(id="advice-1")
+    monkeypatch.setattr(
+        advice_api.advice_service,
+        "latest_ranked_signal_date",
+        AsyncMock(return_value=date(2026, 7, 17)),
+    )
+    generate = AsyncMock(return_value=generated)
+    monkeypatch.setattr(advice_api.advice_service, "generate_for_user", generate)
+    monkeypatch.setattr(
+        advice_api.advice_service, "get_advice_response", AsyncMock(return_value=response)
+    )
+    db = SimpleNamespace()
+    user = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
+
+    result = await advice_api.generate_advice(user=user, db=db, force=True)
+
+    generate.assert_awaited_once_with(db, user.id, date(2026, 7, 17), force=True)
+    assert result.data is response
+
+
+@pytest.mark.asyncio
+async def test_generate_returns_409_when_ranked_predictions_are_missing(monkeypatch):
+    monkeypatch.setattr(
+        advice_api.advice_service,
+        "latest_ranked_signal_date",
+        AsyncMock(return_value=None),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await advice_api.generate_advice(
+            user=SimpleNamespace(id="user-1"), db=SimpleNamespace(), force=False
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "ranked_predictions_missing"

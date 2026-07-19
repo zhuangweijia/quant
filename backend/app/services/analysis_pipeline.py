@@ -6,11 +6,13 @@ Executes stages in sequence:
 3. Model prediction
 4. SHAP explanation
 5. Ranking generation
+6. Per-user portfolio advice
 """
 
 import asyncio
 import uuid
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -31,7 +33,12 @@ STAGES = [
     "model_prediction",
     "shap_explanation",
     "ranking",
+    "portfolio_advice",
 ]
+
+
+def _shanghai_signal_date() -> date:
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date()
 
 
 class AnalysisPipeline:
@@ -204,6 +211,12 @@ class AnalysisPipeline:
             async with AsyncSessionLocal() as db:
                 await generate_daily_ranking(db, date.today())
                 await db.commit()
+        elif stage == "portfolio_advice":
+            from app.services.advice_service import generate_for_all_users
+
+            summary = await generate_for_all_users(_shanghai_signal_date())
+            for failure in summary["failed"]:
+                logger.warning("portfolio_advice.user_failed", **failure)
         else:
             logger.warning("analysis_pipeline.unknown_stage", stage=stage)
 

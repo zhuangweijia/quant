@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     admin,
+    advice,
     analysis,
     auth,
     dashboard,
@@ -29,3 +30,4 @@ router.include_router(model.router, prefix="/model", tags=["模型"])
 router.include_router(analysis.router, prefix="/analysis", tags=["分析"])
 router.include_router(setup.router, prefix="/setup", tags=["首次配置"])
 router.include_router(portfolio.router, prefix="/portfolio", tags=["投资组合"])
+router.include_router(advice.router, prefix="/advice", tags=["每日建议"])

@@ -54,6 +54,7 @@ async def lifespan(app: FastAPI):
         event_bus.TOPIC_ANALYSIS_PROGRESS,
         event_bus.TOPIC_RANKING_READY,
         event_bus.TOPIC_DATA_SYNC_ALERT,
+        event_bus.TOPIC_ADVICE_READY,
     ]:
         try:
             await event_bus.subscribe(

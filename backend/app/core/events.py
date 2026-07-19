@@ -15,6 +15,7 @@ class EventBus:
     TOPIC_ANALYSIS_PROGRESS = "analysis:progress"
     TOPIC_RANKING_READY = "analysis:ranking_ready"
     TOPIC_DATA_SYNC_ALERT = "data_sync:alert"
+    TOPIC_ADVICE_READY = "advice:ready"
 
     def __init__(self):
         self._redis: aioredis.Redis | None = None

@@ -30,6 +30,13 @@ def test_money_and_weight_columns_keep_decimal_precision():
     assert str(AdviceItem.__table__.c.target_weight.type) == "NUMERIC(10, 8)"
 
 
+def test_daily_advice_persists_non_null_progressive_constraint_codes():
+    column = DailyAdvice.__table__.c.constraint_violations
+
+    assert column.nullable is False
+    assert column.default.arg(None) == []
+
+
 def test_portfolio_event_cash_delta_migration_is_required():
     migration_path = (
         Path(__file__).parents[1]
@@ -50,6 +57,32 @@ def test_portfolio_event_cash_delta_migration_is_required():
     nullable = next(
         keyword.value.value
         for keyword in cash_delta_column.keywords
+        if keyword.arg == "nullable" and isinstance(keyword.value, ast.Constant)
+    )
+
+    assert nullable is False
+
+
+def test_migration_adds_non_null_constraint_violations_default_empty():
+    migration_path = (
+        Path(__file__).parents[1]
+        / "alembic"
+        / "versions"
+        / "c2d4e6f8a0b1_add_portfolio_decision_domain.py"
+    )
+    tree = ast.parse(migration_path.read_text(encoding="utf-8"))
+    column = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "Column"
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "constraint_violations"
+    )
+    nullable = next(
+        keyword.value.value
+        for keyword in column.keywords
         if keyword.arg == "nullable" and isinstance(keyword.value, ast.Constant)
     )
 
