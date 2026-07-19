@@ -65,6 +65,8 @@ function assertNever(value: never): never {
   throw new Error(`Unsupported advice state: ${value}`)
 }
 
+export const EXECUTION_REFRESH_WARNING = '执行已记录，但刷新最新状态失败，请重试刷新'
+
 export const useAdviceStore = defineStore('advice', () => {
   const today = ref<AdviceTodayResponse | null>(null)
   const loading = ref(false)
@@ -111,7 +113,19 @@ export const useAdviceStore = defineStore('advice', () => {
       )
       applyExecution(response.data)
       const portfolioStore = usePortfolioStore()
-      await Promise.all([loadToday(), portfolioStore.loadPortfolio()])
+      const refreshResults = await Promise.all([
+        loadToday().then(
+          () => true,
+          () => false,
+        ),
+        portfolioStore.loadPortfolio().then(
+          () => true,
+          () => false,
+        ),
+      ])
+      if (refreshResults.includes(false)) {
+        error.value = EXECUTION_REFRESH_WARNING
+      }
       return response.data
     })
   }

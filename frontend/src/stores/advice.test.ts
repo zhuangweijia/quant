@@ -1,7 +1,8 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { adviceApi } from '@/api/advice'
+import { portfolioApi } from '@/api/portfolio'
 import { usePortfolioStore } from '@/stores/portfolio'
 import type {
   AdviceItemResponse,
@@ -90,21 +91,26 @@ function today(items: AdviceItemResponse[] = [pendingItem]): AvailableToday {
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((done, fail) => {
     resolve = done
+    reject = fail
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 
 async function flushMicrotasks() {
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let index = 0; index < 10; index += 1) await Promise.resolve()
 }
 
 describe('useAdviceStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
   it('keeps the last successful today state when a refresh fails', async () => {
@@ -219,5 +225,127 @@ describe('useAdviceStore', () => {
 
     expect(store.today).toEqual(refreshedToday)
     expect(store.loading).toBe(false)
+  })
+
+  it.each([
+    ['today refresh fails', true, false],
+    ['portfolio refresh fails', false, true],
+    ['both refreshes fail', true, true],
+  ])(
+    'keeps a successful execution when %s',
+    async (_case, failToday, failPortfolio) => {
+      const executedItem: AdviceItemResponse = {
+        ...pendingItem,
+        status: 'executed',
+        execution: {
+          id: 'execution-1',
+          disposition: 'executed',
+          quantity: 100,
+          price: '10.1001',
+          fee: '5.0001',
+          executed_at: '2026-07-19T09:35:00+08:00',
+          reason: '',
+          within_price_band: true,
+          revision: 4,
+          created_at: '2026-07-19T09:35:00+08:00',
+          updated_at: '2026-07-19T09:36:00+08:00',
+        },
+      }
+      const executionResponse = { item: executedItem, advice_state: 'handled' as const }
+      vi.mocked(adviceApi.updateExecution).mockResolvedValue({ data: executionResponse } as never)
+      const refreshedToday: AdviceTodayResponse = {
+        ...today([executedItem, unchangedItem]),
+        state: 'handled',
+        advice: {
+          ...today([executedItem, unchangedItem]).advice,
+          status: 'handled',
+        },
+      }
+      const todayReload = deferred<never>()
+      const portfolioReload = deferred<never>()
+      vi.mocked(adviceApi.getToday).mockReturnValue(todayReload.promise)
+      vi.spyOn(portfolioApi, 'getPortfolio').mockReturnValue(portfolioReload.promise)
+      const store = useAdviceStore()
+      const portfolioStore = usePortfolioStore()
+      store.today = today([pendingItem, unchangedItem])
+      const payload = {
+        disposition: 'executed' as const,
+        quantity: 100,
+        price: '10.1001',
+        fee: '5.0001',
+        executed_at: '2026-07-19T09:35:00+08:00',
+        reason: '',
+        expected_revision: 3,
+        acknowledge_outside_advice: false,
+      }
+
+      let outcome: { ok: boolean; value?: unknown; error?: unknown } | null = null
+      const observed = store.updateExecution('item-1', payload).then(
+        value => { outcome = { ok: true, value } },
+        error => { outcome = { ok: false, error } },
+      )
+      await flushMicrotasks()
+
+      expect(adviceApi.getToday).toHaveBeenCalledOnce()
+      expect(portfolioApi.getPortfolio).toHaveBeenCalledOnce()
+      expect(store.today?.advice?.items[0]).toEqual(executedItem)
+      expect(store.today?.advice?.items[0].execution?.revision).toBe(4)
+      expect(store.loading).toBe(true)
+      expect(portfolioStore.loading).toBe(true)
+
+      if (!failToday && failPortfolio) {
+        portfolioReload.reject(new Error('持仓刷新失败'))
+      } else if (failToday) {
+        todayReload.reject(new Error('今日刷新失败'))
+      } else {
+        todayReload.resolve({ data: refreshedToday } as never)
+      }
+      await flushMicrotasks()
+      expect(outcome).toBeNull()
+
+      if (!failToday && failPortfolio) {
+        todayReload.resolve({ data: refreshedToday } as never)
+      } else if (failPortfolio) {
+        portfolioReload.reject(new Error('持仓刷新失败'))
+      } else {
+        portfolioReload.resolve({ data: {} } as never)
+      }
+      await observed
+
+      expect(outcome).toEqual({ ok: true, value: executionResponse })
+      expect(store.error).toBe('执行已记录，但刷新最新状态失败，请重试刷新')
+      expect(store.loading).toBe(false)
+      expect(portfolioStore.loading).toBe(false)
+      if (failToday) {
+        expect(store.today?.advice?.items[0]).toEqual(executedItem)
+      }
+    },
+  )
+
+  it('rejects a failed execution API request without applying or refreshing', async () => {
+    vi.mocked(adviceApi.updateExecution).mockRejectedValue(new Error('执行保存失败'))
+    const getToday = vi.mocked(adviceApi.getToday)
+    const getPortfolio = vi.spyOn(portfolioApi, 'getPortfolio')
+    const store = useAdviceStore()
+    const portfolioStore = usePortfolioStore()
+    store.today = today([pendingItem, unchangedItem])
+
+    await expect(store.updateExecution('item-1', {
+      disposition: 'executed',
+      quantity: 100,
+      price: '10.1001',
+      fee: '5.0001',
+      executed_at: '2026-07-19T09:35:00+08:00',
+      reason: '',
+      expected_revision: 0,
+      acknowledge_outside_advice: false,
+    })).rejects.toThrow('执行保存失败')
+
+    expect(store.today?.advice?.items[0]).toEqual(pendingItem)
+    expect(getToday).not.toHaveBeenCalled()
+    expect(getPortfolio).not.toHaveBeenCalled()
+    expect(store.error).toBe('执行保存失败')
+    expect(store.loading).toBe(false)
+    expect(portfolioStore.loading).toBe(false)
   })
 })

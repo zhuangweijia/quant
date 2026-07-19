@@ -23,7 +23,12 @@ export function useWebSocket() {
     const newChannels = ch.filter((c) => !channels.value.includes(c));
     if (newChannels.length > 0) {
       channels.value.push(...newChannels);
-      wsClient.send({ action: "subscribe", channels: newChannels });
+      try {
+        wsClient.send({ action: "subscribe", channels: newChannels });
+      } catch (caught) {
+        channels.value = channels.value.filter((channel) => !newChannels.includes(channel));
+        throw caught;
+      }
     }
   }
 

@@ -3,10 +3,12 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from '@/api/client'
+import { adviceApi } from '@/api/advice'
+import { portfolioApi } from '@/api/portfolio'
 import { useAdviceStore } from '@/stores/advice'
 import type { AdviceItemResponse } from '@/types/advice'
 import ExecutionDialog from './ExecutionDialog.vue'
-import { adviceItem, execution } from './test-fixtures'
+import { adviceItem, dailyAdvice, execution } from './test-fixtures'
 
 const mounted: VueWrapper[] = []
 
@@ -206,5 +208,43 @@ describe('ExecutionDialog', () => {
     await click('[data-testid="execution-acknowledge"]')
     expect(document.querySelector('[data-testid="execution-acknowledge"]')).toBeNull()
     expect(document.body.textContent).toContain('请刷新今日建议并核对持仓')
+  })
+
+  it('closes successfully with the real store when execution persists but refreshes fail', async () => {
+    const item = adviceItem()
+    const executedItem = adviceItem({
+      status: 'executed',
+      execution: execution({
+        disposition: 'executed',
+        quantity: 200,
+        price: '10.1000',
+        revision: 1,
+      }),
+    })
+    const store = useAdviceStore()
+    store.today = {
+      state: 'ready',
+      setup_required: false,
+      advice: dailyAdvice({ items: [item] }),
+      error_code: null,
+      error_message: null,
+    }
+    vi.spyOn(adviceApi, 'updateExecution').mockResolvedValue({
+      data: { item: executedItem, advice_state: 'handled' },
+    } as never)
+    vi.spyOn(adviceApi, 'getToday').mockRejectedValue(new Error('今日刷新失败'))
+    vi.spyOn(portfolioApi, 'getPortfolio').mockRejectedValue(new Error('持仓刷新失败'))
+    const wrapper = await mountDialog(item)
+    await setInput('#execution-price', '10.1000')
+    await setInput('#execution-time', '2026-07-19T10:30')
+
+    await click('[data-testid="execution-submit"]')
+
+    expect(wrapper.emitted('success')).toEqual([[]])
+    expect(wrapper.emitted('update:open')).toContainEqual([false])
+    expect(store.today?.advice?.items[0]).toEqual(executedItem)
+    expect(store.error).toBe('执行已记录，但刷新最新状态失败，请重试刷新')
+    expect(document.body.textContent).not.toContain('保存失败')
+    expect(document.querySelector('[data-testid="execution-acknowledge"]')).toBeNull()
   })
 })

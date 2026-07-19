@@ -7,7 +7,7 @@ import { BasicPage } from '@/components/global-layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useWebSocket } from '@/composables/useWebSocket'
-import { useAdviceStore } from '@/stores/advice'
+import { EXECUTION_REFRESH_WARNING, useAdviceStore } from '@/stores/advice'
 import { useAuthStore } from '@/stores/auth'
 import { usePortfolioStore } from '@/stores/portfolio'
 import type { AdviceItemResponse } from '@/types/advice'
@@ -27,14 +27,20 @@ const actionError = ref('')
 const generating = ref(false)
 const selectedItem = ref<AdviceItemResponse | null>(null)
 const executionOpen = ref(false)
+const refreshingExecutionState = ref(false)
 const setupConfirmed = ref(false)
 let redirectedToSetup = false
 let removeReadyHandler: (() => void) | undefined
+let websocketRegistered = false
+let unmounted = false
 
 const today = computed(() => adviceStore.today)
 const advice = computed(() => today.value?.advice ?? null)
 const stateError = computed(() => (
   today.value?.error_message || advice.value?.error_message || '建议生成失败，请稍后重试'
+))
+const executionRefreshWarning = computed(() => (
+  adviceStore.error === EXECUTION_REFRESH_WARNING ? adviceStore.error : ''
 ))
 
 function errorMessage(error: unknown): string {
@@ -46,7 +52,30 @@ function errorMessage(error: unknown): string {
 async function redirectToSetup() {
   if (redirectedToSetup) return
   redirectedToSetup = true
+  cleanupReadyUpdates()
   await router.replace('/portfolio/setup')
+}
+
+function registerReadyUpdates() {
+  if (unmounted || websocketRegistered) return
+  removeReadyHandler = onMessage('advice:ready', handleReadyEvent)
+  websocketRegistered = true
+  try {
+    subscribe('advice:ready')
+  } catch (caught) {
+    removeReadyHandler?.()
+    removeReadyHandler = undefined
+    websocketRegistered = false
+    throw caught
+  }
+}
+
+function cleanupReadyUpdates() {
+  if (!websocketRegistered) return
+  removeReadyHandler?.()
+  removeReadyHandler = undefined
+  unsubscribe('advice:ready')
+  websocketRegistered = false
 }
 
 async function initialize() {
@@ -55,16 +84,24 @@ async function initialize() {
   requestError.value = ''
   try {
     const setupStatus = await portfolioStore.loadSetupStatus()
+    if (unmounted) return
     if (!setupStatus.complete) {
       await redirectToSetup()
       return
     }
     setupConfirmed.value = true
-    const [todayResponse] = await Promise.all([
+    registerReadyUpdates()
+    const [todayResult, portfolioResult] = await Promise.allSettled([
       adviceStore.loadToday(),
       portfolioStore.loadPortfolio(),
     ])
-    if (todayResponse.setup_required) await redirectToSetup()
+    if (unmounted) return
+    if (todayResult.status === 'fulfilled' && todayResult.value.setup_required) {
+      await redirectToSetup()
+      return
+    }
+    if (todayResult.status === 'rejected') throw todayResult.reason
+    if (portfolioResult.status === 'rejected') throw portfolioResult.reason
   } catch (caught) {
     requestError.value = errorMessage(caught)
   } finally {
@@ -85,6 +122,23 @@ async function generateAdvice(force: boolean) {
   }
 }
 
+async function retryExecutionRefresh() {
+  if (refreshingExecutionState.value) return
+  refreshingExecutionState.value = true
+  const results = await Promise.all([
+    adviceStore.loadToday().then(
+      () => true,
+      () => false,
+    ),
+    portfolioStore.loadPortfolio().then(
+      () => true,
+      () => false,
+    ),
+  ])
+  adviceStore.error = results.includes(false) ? EXECUTION_REFRESH_WARNING : null
+  refreshingExecutionState.value = false
+}
+
 function openExecution(item: AdviceItemResponse) {
   selectedItem.value = item
   executionOpen.value = true
@@ -98,14 +152,13 @@ function handleReadyEvent(event: unknown) {
 }
 
 onMounted(() => {
-  subscribe('advice:ready')
-  removeReadyHandler = onMessage('advice:ready', handleReadyEvent)
+  unmounted = false
   void initialize()
 })
 
 onUnmounted(() => {
-  removeReadyHandler?.()
-  unsubscribe('advice:ready')
+  unmounted = true
+  cleanupReadyUpdates()
 })
 </script>
 
@@ -128,6 +181,27 @@ onUnmounted(() => {
     </div>
 
     <template v-else-if="today">
+      <div
+        v-if="executionRefreshWarning"
+        data-testid="execution-refresh-warning"
+        role="status"
+        class="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 text-sm"
+      >
+        <p class="font-medium">{{ executionRefreshWarning }}</p>
+        <p class="mt-1 text-muted-foreground">执行结果已保留；当前页面或持仓可能不是最新状态。</p>
+        <Button
+          data-testid="execution-refresh-retry"
+          class="mt-3"
+          type="button"
+          size="sm"
+          variant="outline"
+          :loading="refreshingExecutionState"
+          :disabled="refreshingExecutionState"
+          @click="retryExecutionRefresh"
+        >
+          <RefreshCw class="size-4" />刷新今日与持仓
+        </Button>
+      </div>
       <div v-if="actionError" role="alert" class="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
         {{ actionError }}
       </div>

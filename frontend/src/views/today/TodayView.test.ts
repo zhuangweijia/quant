@@ -13,6 +13,7 @@ const replace = vi.fn()
 const subscribe = vi.fn()
 const unsubscribe = vi.fn()
 const off = vi.fn()
+const onMessage = vi.fn()
 let readyHandler: ((event: unknown) => void) | undefined
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ replace }) }))
@@ -20,10 +21,7 @@ vi.mock('@/composables/useWebSocket', () => ({
   useWebSocket: () => ({
     subscribe,
     unsubscribe,
-    onMessage: vi.fn((_type: string, handler: (event: unknown) => void) => {
-      readyHandler = handler
-      return off
-    }),
+    onMessage,
   }),
 }))
 
@@ -57,6 +55,11 @@ describe('TodayView', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     readyHandler = undefined
+    subscribe.mockImplementation(() => undefined)
+    onMessage.mockImplementation((_type: string, handler: (event: unknown) => void) => {
+      readyHandler = handler
+      return off
+    })
     const authStore = useAuthStore()
     authStore.user = {
       id: 'user-1', username: 'tester', role: 'trader', is_active: true,
@@ -90,16 +93,173 @@ describe('TodayView', () => {
       order.push('portfolio')
       return {} as never
     })
+    onMessage.mockImplementation((_type: string, handler: (event: unknown) => void) => {
+      order.push('handler')
+      readyHandler = handler
+      return off
+    })
+    subscribe.mockImplementation(() => { order.push('subscribe') })
 
     const wrapper = mountView()
     expect(wrapper.text()).toContain('正在检查组合设置')
     expect(order).toEqual(['setup:start'])
-    readyHandler?.({ user_id: 'user-1' })
-    await flushPromises()
+    expect(onMessage).not.toHaveBeenCalled()
+    expect(subscribe).not.toHaveBeenCalled()
     expect(order).toEqual(['setup:start'])
     resolveSetup()
     await flushPromises()
-    expect(order).toEqual(['setup:start', 'setup:end', 'today', 'portfolio'])
+    expect(order).toEqual([
+      'setup:start', 'setup:end', 'handler', 'subscribe', 'today', 'portfolio',
+    ])
+    expect(onMessage).toHaveBeenCalledOnce()
+    expect(subscribe).toHaveBeenCalledOnce()
+  })
+
+  it('does not register or clean websocket resources for incomplete setup', async () => {
+    const portfolioStore = usePortfolioStore()
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockResolvedValue(
+      { complete: false, has_profile: true, has_portfolio: false, missing: ['portfolio'] },
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(onMessage).not.toHaveBeenCalled()
+    expect(subscribe).not.toHaveBeenCalled()
+    wrapper.unmount()
+    expect(off).not.toHaveBeenCalled()
+    expect(unsubscribe).not.toHaveBeenCalled()
+  })
+
+  it('does not register or fake cleanup when unmounted before setup finishes', async () => {
+    const portfolioStore = usePortfolioStore()
+    let resolveSetup!: () => void
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockImplementation(async () => {
+      await new Promise<void>(resolve => { resolveSetup = resolve })
+      return { complete: true, has_profile: true, has_portfolio: true, missing: [] }
+    })
+    const wrapper = mountView()
+
+    wrapper.unmount()
+    expect(off).not.toHaveBeenCalled()
+    expect(unsubscribe).not.toHaveBeenCalled()
+    resolveSetup()
+    await flushPromises()
+    expect(onMessage).not.toHaveBeenCalled()
+    expect(subscribe).not.toHaveBeenCalled()
+  })
+
+  it('does not redirect when pending setup resolves incomplete after unmount', async () => {
+    const portfolioStore = usePortfolioStore()
+    let resolveSetup!: () => void
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockImplementation(async () => {
+      await new Promise<void>(resolve => { resolveSetup = resolve })
+      return { complete: false, has_profile: true, has_portfolio: false, missing: ['portfolio'] }
+    })
+    const wrapper = mountView()
+
+    wrapper.unmount()
+    resolveSetup()
+    await flushPromises()
+    expect(replace).not.toHaveBeenCalled()
+    expect(onMessage).not.toHaveBeenCalled()
+    expect(subscribe).not.toHaveBeenCalled()
+    expect(off).not.toHaveBeenCalled()
+    expect(unsubscribe).not.toHaveBeenCalled()
+  })
+
+  it('cleans registered websocket resources before redirecting from today setup_required', async () => {
+    const portfolioStore = usePortfolioStore()
+    const adviceStore = useAdviceStore()
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockResolvedValue(
+      { complete: true, has_profile: true, has_portfolio: true, missing: [] },
+    )
+    vi.spyOn(adviceStore, 'loadToday').mockResolvedValue({
+      state: 'not_generated', setup_required: true, advice: null,
+      error_code: 'setup_required', error_message: '请先初始化组合',
+    })
+    vi.spyOn(portfolioStore, 'loadPortfolio').mockResolvedValue({} as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(onMessage).toHaveBeenCalledOnce()
+    expect(subscribe).toHaveBeenCalledOnce()
+    expect(replace).toHaveBeenCalledWith('/portfolio/setup')
+    expect(off).toHaveBeenCalledOnce()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    wrapper.unmount()
+    expect(off).toHaveBeenCalledOnce()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('prioritizes today setup_required redirect when the concurrent portfolio load fails', async () => {
+    const portfolioStore = usePortfolioStore()
+    const adviceStore = useAdviceStore()
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockResolvedValue(
+      { complete: true, has_profile: true, has_portfolio: true, missing: [] },
+    )
+    vi.spyOn(adviceStore, 'loadToday').mockResolvedValue({
+      state: 'not_generated', setup_required: true, advice: null,
+      error_code: 'setup_required', error_message: '请先初始化组合',
+    })
+    vi.spyOn(portfolioStore, 'loadPortfolio').mockRejectedValue(new Error('持仓刷新失败'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(replace).toHaveBeenCalledWith('/portfolio/setup')
+    expect(off).toHaveBeenCalledOnce()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    wrapper.unmount()
+    expect(off).toHaveBeenCalledOnce()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
+  it('does not redirect from completed requests after unmount', async () => {
+    const portfolioStore = usePortfolioStore()
+    const adviceStore = useAdviceStore()
+    let resolveToday!: (value: AdviceTodayResponse) => void
+    let resolvePortfolio!: () => void
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockResolvedValue(
+      { complete: true, has_profile: true, has_portfolio: true, missing: [] },
+    )
+    vi.spyOn(adviceStore, 'loadToday').mockReturnValue(
+      new Promise(resolve => { resolveToday = resolve }),
+    )
+    vi.spyOn(portfolioStore, 'loadPortfolio').mockReturnValue(
+      new Promise(resolve => { resolvePortfolio = () => resolve({} as never) }),
+    )
+    const wrapper = mountView()
+    await flushPromises()
+    expect(onMessage).toHaveBeenCalledOnce()
+    expect(subscribe).toHaveBeenCalledOnce()
+
+    wrapper.unmount()
+    expect(off).toHaveBeenCalledOnce()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+    resolveToday({
+      state: 'not_generated', setup_required: true, advice: null,
+      error_code: 'setup_required', error_message: '请先初始化组合',
+    })
+    resolvePortfolio()
+    await flushPromises()
+    expect(replace).not.toHaveBeenCalled()
+  })
+
+  it('removes a registered handler when channel subscription throws', async () => {
+    const portfolioStore = usePortfolioStore()
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockResolvedValue(
+      { complete: true, has_profile: true, has_portfolio: true, missing: [] },
+    )
+    subscribe.mockImplementation(() => { throw new Error('订阅失败') })
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(onMessage).toHaveBeenCalledOnce()
+    expect(subscribe).toHaveBeenCalledOnce()
+    expect(off).toHaveBeenCalledOnce()
+    expect(unsubscribe).not.toHaveBeenCalled()
+    wrapper.unmount()
+    expect(off).toHaveBeenCalledOnce()
+    expect(unsubscribe).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -186,6 +346,34 @@ describe('TodayView', () => {
     await flushPromises()
     expect(loadToday).toHaveBeenCalledTimes(2)
     expect(wrapper.text()).toContain('生成首份建议')
+  })
+
+  it('shows a non-blocking execution refresh warning and retries both latest states', async () => {
+    const response: AdviceTodayResponse = {
+      state: 'ready', setup_required: false, advice: dailyAdvice(),
+      error_code: null, error_message: null,
+    }
+    const adviceStore = state(response)
+    const portfolioStore = usePortfolioStore()
+    vi.spyOn(portfolioStore, 'loadSetupStatus').mockResolvedValue(
+      { complete: true, has_profile: true, has_portfolio: true, missing: [] },
+    )
+    vi.spyOn(portfolioStore, 'loadPortfolio').mockResolvedValue({} as never)
+    const wrapper = mountView()
+    await flushPromises()
+    const todayCalls = vi.mocked(adviceStore.loadToday).mock.calls.length
+    const portfolioCalls = vi.mocked(portfolioStore.loadPortfolio).mock.calls.length
+
+    adviceStore.error = '执行已记录，但刷新最新状态失败，请重试刷新'
+    await flushPromises()
+    expect(wrapper.get('[data-testid="execution-refresh-warning"]').text())
+      .toContain('执行已记录，但刷新最新状态失败，请重试刷新')
+
+    await wrapper.get('[data-testid="execution-refresh-retry"]').trigger('click')
+    await flushPromises()
+    expect(adviceStore.loadToday).toHaveBeenCalledTimes(todayCalls + 1)
+    expect(portfolioStore.loadPortfolio).toHaveBeenCalledTimes(portfolioCalls + 1)
+    expect(wrapper.find('[data-testid="execution-refresh-warning"]').exists()).toBe(false)
   })
 
   it('generates first advice, retries failures, and filters ready events by current user', async () => {
