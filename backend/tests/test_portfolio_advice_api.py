@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from inspect import signature
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -8,6 +9,8 @@ from fastapi import HTTPException
 
 from app.api.v1 import advice as advice_api
 from app.api.v1 import portfolio as portfolio_api
+from app.main import app
+from app.schemas.advice import ExecutionUpdateRequest
 from app.schemas.portfolio import (
     CashMovementRequest,
     HoldingsReconcileRequest,
@@ -178,3 +181,50 @@ async def test_generate_returns_409_when_ranked_predictions_are_missing(monkeypa
 
     assert exc.value.status_code == 409
     assert exc.value.detail["code"] == "ranked_predictions_missing"
+
+
+@pytest.mark.asyncio
+async def test_execution_route_uses_authenticated_user_and_request_metadata(monkeypatch):
+    expected = SimpleNamespace(item=SimpleNamespace())
+    update_execution = AsyncMock(return_value=expected)
+    monkeypatch.setattr(advice_api.execution_service, "update_execution", update_execution)
+    monkeypatch.setattr(
+        advice_api, "extract_request_info", lambda request: ("127.0.0.1", "pytest")
+    )
+    db = SimpleNamespace()
+    user = SimpleNamespace(id="00000000-0000-0000-0000-000000000001")
+    payload = ExecutionUpdateRequest(
+        disposition="skipped", reason="本次不执行", expected_revision=0
+    )
+
+    response = await advice_api.record_execution(
+        user=user,
+        db=db,
+        item_id="00000000-0000-0000-0000-000000000010",
+        payload=payload,
+        idempotency_key="key-12345678",
+        request=SimpleNamespace(client=None, headers={}),
+    )
+
+    update_execution.assert_awaited_once_with(
+        db,
+        user.id,
+        "00000000-0000-0000-0000-000000000010",
+        payload,
+        "key-12345678",
+        ("127.0.0.1", "pytest"),
+    )
+    assert response.data is expected
+
+
+def test_execution_api_requires_bounded_idempotency_header_and_forbids_owner_ids():
+    operation = app.openapi()["paths"]["/api/v1/advice/items/{item_id}/execution"]["put"]
+    header = next(parameter for parameter in operation["parameters"] if parameter["in"] == "header")
+    fields = signature(ExecutionUpdateRequest).parameters
+
+    assert header["name"] == "Idempotency-Key"
+    assert header["required"] is True
+    assert header["schema"]["minLength"] == 8
+    assert header["schema"]["maxLength"] == 64
+    assert "user_id" not in fields
+    assert "portfolio_id" not in fields
