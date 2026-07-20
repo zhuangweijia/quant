@@ -1,4 +1,4 @@
-FROM python:3.11-slim AS builder
+FROM python:3.12-slim AS builder
 
 RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources
 
@@ -12,7 +12,7 @@ COPY pyproject.toml .
 COPY app ./app
 RUN pip install --no-cache-dir --prefix=/install -i https://pypi.tuna.tsinghua.edu.cn/simple "."
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
 
@@ -24,7 +24,6 @@ COPY alembic ./alembic
 COPY alembic.ini .
 COPY scripts ./scripts
 COPY entrypoint.sh .
-COPY keys ./keys
 
 RUN mkdir -p /app/keys && chown -R appuser:appuser /app
 
